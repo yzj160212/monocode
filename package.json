@@ -26,7 +26,15 @@
     "setup:linux:fedora": "bash scripts/install-linux-deps-fedora.sh",
     "build:linux": "tauri build --bundles deb,appimage && bash scripts/repack-appimage.sh",
     "build:fedora": "tauri build --bundles rpm",
-    "build:windows": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" && tauri build --bundles nsis"
+    "build:windows": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc\" && tauri build --bundles nsis",
+    "zh-cn:extract": "node tools/zh-cn/extract.mjs",
+    "zh-cn:translate": "node tools/zh-cn/translate.mjs",
+    "zh-cn:native": "node tools/zh-cn/patch-native.mjs",
+    "zh-cn:post": "node tools/zh-cn/postbuild.mjs",
+    "zh-cn:build": "node tools/zh-cn/build.mjs",
+    "zh-cn:test": "node --test tools/zh-cn/runtime.test.mjs tools/zh-cn/extract.test.mjs",
+    "zh-cn:verify": "node tools/zh-cn/verify.mjs",
+    "zh-cn:audit": "node tools/zh-cn/audit.mjs"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",

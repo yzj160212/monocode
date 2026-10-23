@@ -1,0 +1,14 @@
+# 明确保持英文的文案（每行一条，原样匹配）。
+# 用途：内部日志、协议常量、品牌并列词——翻译只会降低可读性。
+codex opencode cursor grok pi omp fx hermes antigravity devin binary path
+OMP get_available_commands returned no commands array
+Pi · OpenAI Codex
+# 纯代码/样式模板：只有占位符与标识符，无需翻译
+{0} — {1} — MonoCode
+padding-left: calc({0}ch + 6px); text-indent: -{1}ch
+scrollTop {0} -> {1}
+transform {0}ms {1}, opacity {2}ms {3}
+devin
+codex
+acp
+{0}deg

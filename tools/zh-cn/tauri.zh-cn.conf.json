@@ -1,0 +1,12 @@
+{
+  "build": {
+    "beforeBuildCommand": "node tools/zh-cn/build.mjs"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "signingIdentity": "-",
+      "infoPlist": "Info.zh.plist"
+    }
+  }
+}

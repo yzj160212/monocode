@@ -58,3 +58,8 @@ Desktop.ini
 
 # Local document preview mockup
 /work/mono-document-preview.html
+
+# 简体中文语言层生成的构建产物（字典存在独立分支 zh-cn-state）
+.zh-cn/
+src-tauri/src/zh_cn.rs
+src-tauri/Info.zh.plist
