@@ -47,10 +47,13 @@ export function postBuild(root, { distDir = "dist" } = {}) {
   const dist = path.join(root, distDir);
   if (!fs.existsSync(dist)) throw new Error(`${distDir}/ missing; run the frontend build first`);
 
-  const dictionaryPath = path.join(root, ".zh-cn", "dictionary.json");
-  const dictionary = fs.existsSync(dictionaryPath)
-    ? JSON.parse(fs.readFileSync(dictionaryPath, "utf8"))
-    : { entries: {}, patterns: {}, kept: {} };
+  // Fall back to the committed seed. Without it a build that never ran
+  // translate.mjs (first run, or no credentials) would silently inject an empty
+  // dictionary and ship an all-English app.
+  const dictionary = loadDictionary(root);
+  if (Object.keys(dictionary.entries).length === 0 && Object.keys(dictionary.patterns).length === 0) {
+    throw new Error("no translations available: .zh-cn/dictionary.json and the seed are both empty");
+  }
 
   const payload = {
     entries: dropKept(dictionary.entries, dictionary.kept),
@@ -80,6 +83,22 @@ export function postBuild(root, { distDir = "dist" } = {}) {
   fs.writeFileSync(path.join(root, ".zh-cn", "manifest.json"), `${JSON.stringify(manifest, null, 1)}\n`);
 
   return manifest;
+}
+
+/** Working dictionary if present, else the committed seed snapshot. */
+function loadDictionary(root) {
+  const candidates = [
+    path.join(root, ".zh-cn", "dictionary.json"),
+    path.join(root, "tools", "zh-cn", "seed.zh-cn.json"),
+  ];
+  for (const file of candidates) {
+    if (!fs.existsSync(file)) continue;
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (parsed && typeof parsed === "object") {
+      return { entries: parsed.entries ?? {}, patterns: parsed.patterns ?? {}, kept: parsed.kept ?? {} };
+    }
+  }
+  return { entries: {}, patterns: {}, kept: {} };
 }
 
 /** Strings the translator deliberately left in English are not rewritten. */
