@@ -63,7 +63,7 @@ jobs:
     needs: gate
     if: needs.gate.outputs.should_build == 'true'
     # macos-latest 是 Apple Silicon（M 系列）镜像，产物本身就是 arm64。
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri -> target
+          workspaces: . -> target
           key: zh-cn-aarch64
 
       # 复用上一轮的字典，只翻译新增/变更的文案。
@@ -97,6 +97,10 @@ jobs:
           fi
 
       - run: npm ci
+
+      # 语言层自身的回归测试：运行时替换规则、代码面跳过、抽取器判定。
+      - name: 测试语言层
+        run: npm run zh-cn:test
 
       - name: 抽取待翻译文案
         run: node tools/zh-cn/extract.mjs
@@ -171,6 +175,7 @@ jobs:
             --target "$GITHUB_SHA" \
             --latest=false
 
+      # 字典存在独立分支，不占 main，也不会被 Sync fork 冲掉。
       - name: 保存增量字典
         env:
           GH_TOKEN: ${{ github.token }}
