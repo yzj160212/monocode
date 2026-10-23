@@ -14,6 +14,7 @@ on:
         default: false
 
 permissions:
+  # 建 Release、推字典分支都需要写权限；其余步骤不再需要额外权限。
   contents: write
 
 concurrency:
