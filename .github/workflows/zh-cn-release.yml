@@ -168,6 +168,8 @@ jobs:
 
           校验：见 \`$FILE.sha256\`
           EOF
+          # 手动强制重打包时脚本命中的是同一个 tag，先删旧 Release 再建。
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
           gh release create "$TAG" "$FILE" "$FILE.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --title "MonoCode $VERSION 简体中文 (aarch64)" \
