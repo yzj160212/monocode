@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extract } from "./extract.mjs";
 import { hookLibRs, hookMenuRs, writeLocalizedPlist, writeNativeModule } from "./lib/native.mjs";
 
 function parseArgs(argv) {
@@ -22,15 +23,24 @@ function parseArgs(argv) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   const root = path.resolve(args.root);
-  const dictionaryPath = path.join(root, ".zh-cn", "dictionary.json");
-  // A build without credentials still produces a usable (partly translated)
-  // app, so a missing dictionary degrades to "English menu" instead of failing.
-  const dictionary = fs.existsSync(dictionaryPath)
+  // Same fallback as the webview layer: a build that skipped translation still
+  // gets the committed seed, so the native menu and the UI never disagree.
+  const candidates = [
+    path.join(root, ".zh-cn", "dictionary.json"),
+    path.join(root, "tools", "zh-cn", "seed.zh-cn.json"),
+  ];
+  const dictionaryPath = candidates.find((file) => fs.existsSync(file));
+  const dictionary = dictionaryPath
     ? JSON.parse(fs.readFileSync(dictionaryPath, "utf8"))
     : { entries: {}, patterns: {}, kept: {}, menu: { byId: {}, byText: {} } };
+  dictionary.menu ??= { byId: {}, byText: {} };
 
+  // The CLI can run standalone (fresh clone, debugging), so derive the menu
+  // tables from the sources instead of demanding a prior extract run.
   const worklistPath = path.join(root, ".zh-cn", "worklist.json");
-  const worklist = JSON.parse(fs.readFileSync(worklistPath, "utf8"));
+  const worklist = fs.existsSync(worklistPath)
+    ? JSON.parse(fs.readFileSync(worklistPath, "utf8"))
+    : extract(root);
   const plist = {};
   for (const { key, text } of worklist.menu.plistDescriptions) {
     const zh = dictionary.entries[text];
