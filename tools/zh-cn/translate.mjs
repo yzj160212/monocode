@@ -281,6 +281,8 @@ async function main() {
     return;
   }
 
+  let providerUsed = false;
+  const startedWith = required.size - pending.length;
   if (pending.length > 0) {
     let provider;
     try {
@@ -291,6 +293,7 @@ async function main() {
       provider = null;
     }
     if (provider) {
+      providerUsed = true;
       console.log(`zh-cn: ${provider.format} ${provider.model} @ ${provider.baseUrl}`);
       const limited = Number.isFinite(args.limit) ? pending.slice(0, args.limit) : pending;
       const groups = batches(limited);
@@ -415,10 +418,23 @@ async function main() {
 
   const total = required.size;
   const covered = total - missing.length;
+  const percent = total === 0 ? 100 : Math.round((covered / total) * 100);
   console.log(
-    `zh-cn: ${covered}/${total} translated (${total === 0 ? 100 : Math.round((covered / total) * 100)}%), ` +
+    `zh-cn: ${covered}/${total} translated (${percent}%), ` +
       `${missing.length} missing, ${Object.keys(output.untranslated).length} rejected`,
   );
+
+  // A configured-but-broken gateway returns nothing for every request, and the
+  // build would then ship an English app while reporting success. Fail loudly
+  // when coverage collapses; a handful of stragglers stays tolerable.
+  const floor = Number(process.env.ZH_CN_MIN_COVERAGE || 80);
+  if (percent < floor) {
+    const why = providerUsed
+      ? "the gateway returned too little — check ZH_TRANSLATE_BASE_URL / MODEL / API_KEY"
+      : `${pending.length} strings have no translation and no credentials were configured`;
+    console.error(`zh-cn: coverage ${percent}% is below the ${floor}% floor (${startedWith}/${total} cached): ${why}`);
+    process.exit(1);
+  }
   if (missing.length > 0 && args.strict) {
     console.error(`zh-cn: strict mode, ${missing.length} strings are untranslated`);
     for (const source of missing.slice(0, 15)) console.error(`  - ${source}`);
