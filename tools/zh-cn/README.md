@@ -2,6 +2,14 @@
 
 把上游 [hardbeat920/monocode](https://github.com/hardbeat920/monocode) 的界面文案翻成简体中文，并打包成 Apple Silicon 的 `aarch64` DMG。
 
+## 快速开始
+
+1. 合入本 PR，或直接在 `main` 上保留这些文件。
+2. 仓库 Settings → Secrets 配 `ZH_TRANSLATE_API_KEY`、`ZH_TRANSLATE_BASE_URL`、`ZH_TRANSLATE_MODEL`（可选 `ZH_TRANSLATE_FORMAT`）。
+3. 上游更新后点 GitHub 的「Sync fork」→ 工作流自动跑：翻译 → 注入 → 打包 → 发 Release `zh-cn-v<版本>`。
+4. 没配 secrets 也能跑：用仓库里的 `seed.zh-cn.json`，新增文案保持英文。
+5. 发现漏译：优先改 `tools/zh-cn/overrides.json`（优先级最高），不用重翻全量。
+
 ## 设计取舍
 
 不修改上游源码，因此 **Sync fork 永远不冲突**。
@@ -36,7 +44,10 @@ tools/zh-cn/
   overrides.json     人工订正，优先级最高（模型翻译会覆盖错的优先改这里）
   keep.txt           明确保持英文的串（内部日志、协议常量、纯代码模板）
   seed.zh-cn.json    已提交的字典快照，首次构建不必全量重翻
-  runtime.test.mjs / extract.test.mjs / reported.test.mjs  语言层回归测试
+  runtime.test.mjs   运行时替换规则（代码面跳过、后续渲染、占位符）
+  extract.test.mjs   抽取器判定（文案 vs CSS vs 枚举值）
+  reported.test.mjs  用户报告的 14 条漏译，锁定不回归
+  pipeline.test.mjs  失败路径（无字典、空字典、陈旧条目、重复注入）
   tauri.zh-cn.conf.json  打包覆盖配置
 ```
 
@@ -80,6 +91,20 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 | `ZH_TRANSLATE_FORMAT` | 否 | `openai`（默认）或 `anthropic` |
 
 翻译字典存在独立分支 `zh-cn-state`，不占 `main`，也不会被 Sync fork 冲掉；每轮只翻译新增/变更的文案。
+
+## 常见故障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| Release 里界面全英文 | 那一轮翻译失败或没配 key，注入的是空字典 | 已修复：无字典时回退 `seed.zh-cn.json`；两者都空时构建直接失败 |
+| `coverage below the 80% floor` | 网关/模型/Key 不对，每批都失败 | 检查三个 `ZH_TRANSLATE_*` secret；临时放宽可设 `ZH_CN_MIN_COVERAGE` |
+| 菜单中文、界面英文（或反之） | 两次注入读了不同来源的字典 | 已修复：`patch-native.mjs` 与 `postbuild.mjs` 用同一回退顺序 |
+| 构建报 `Target aarch64 does not exist` | `--target` 只接受完整三元组 | 用 `aarch64-apple-darwin` |
+| 签名报错 / updater 校验失败 | 上游 `createUpdaterArtifacts: true`，没有签名密钥 | 覆盖配置已关掉；`signingIdentity` 设为 `-`（ad-hoc） |
+| `找不到 DMG` | `--bundles dmg` 会清掉 `.app`，`verify.mjs` 无从校验 | 用 `--bundles app,dmg` |
+| 拷出的 DMG 打不开 | 未公证 | 右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/MonoCode.app` |
+| 菜单点开还是英文 | 前端推送快捷键覆盖重建了整份菜单 | 已修复：`menu.rs` 的 `set_menu` 之后立刻重新本地化 |
+| 新版本没有新 Release | 版本号没变，gate 判定已发布 | 手动 `workflow_dispatch` 勾 `force` |
 
 ## 已知边界
 
