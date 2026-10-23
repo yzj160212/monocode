@@ -9,7 +9,7 @@
 | 层 | 处理对象 | 手段 | 生效时机 |
 | --- | --- | --- | --- |
 | Webview | React 渲染出来的文本节点、`title`/`placeholder`/`aria-label` 等属性 | `dist/zh-cn.js` 运行时字典（精确匹配 + `Open {0}` 模板匹配） | 页面加载时注入，`MutationObserver` 兜住后续渲染 |
-| 原生菜单 | macOS 菜单栏、Dock 右键菜单、Finder 权限弹窗 | 生成 `src-tauri/src/zh_cn.rs`，在 `setup` 里按菜单 id / 当前英文文本retitle | 启动时 |
+| 原生菜单 | macOS 菜单栏、Dock 右键菜单、Finder 权限弹窗 | 生成 `src-tauri/src/zh_cn.rs`，按菜单 id / 当前英文文本 retitle | 启动时，以及**每次前端推送快捷键覆盖、菜单被重建之后** |
 
 为什么不用「把源码里的字符串换成中文」：MonoCode 里同一段英文经常既是界面文案又是逻辑常量（枚举比较、HTTP 头、storage key、CSS 类）。在 DOM 层替换可证明安全；源码层的批量替换会静默改变行为。
 
@@ -21,9 +21,11 @@
 tools/zh-cn/
   extract.mjs        抽取待翻译文案 → .zh-cn/worklist.json
   translate.mjs      增量翻译 → .zh-cn/dictionary.json
-  patch-native.mjs    生成 src-tauri/src/zh_cn.rs 并挂到 lib.rs
+  audit.mjs          列出字典仍覆盖不到的可见文案（覆盖率审计）
+  patch-native.mjs    生成 src-tauri/src/zh_cn.rs，挂到 lib.rs 与 menu.rs
   build.mjs          tsc + vite build + 注入（tauri 的 beforeBuildCommand）
   postbuild.mjs      单独注入 dist/（手工调试用）
+  verify.mjs         校验产物：arm64、注入、菜单表、Info.plist、DMG 校验和
   lib/filters.mjs    「这是不是界面文案」的判定规则
   lib/collect.mjs    TS AST 扫描
   lib/menu-extract.mjs  从 menu.rs / macos.rs / Info.plist 抽原生文案
@@ -31,6 +33,10 @@ tools/zh-cn/
   lib/runtime-script.mjs  生成 dist/zh-cn.js
   lib/native.mjs     生成 zh_cn.rs、改 lib.rs、本地化 Info.plist
   glossary.json      术语表，权重高于模型自由发挥
+  overrides.json     人工订正，优先级最高（模型翻译会覆盖错的优先改这里）
+  keep.txt           明确保持英文的串（内部日志、协议常量、纯代码模板）
+  seed.zh-cn.json    已提交的字典快照，首次构建不必全量重翻
+  runtime.test.mjs / extract.test.mjs / reported.test.mjs  语言层回归测试
   tauri.zh-cn.conf.json  打包覆盖配置
 ```
 
@@ -47,9 +53,13 @@ ZH_TRANSLATE_API_KEY=sk-… \
 ZH_TRANSLATE_MODEL=gpt-4.1-mini \
 node tools/zh-cn/translate.mjs --workers 6
 node tools/zh-cn/patch-native.mjs
-npx tauri build --target aarch64-apple-darwin --bundles dmg \
+npx tauri build --target aarch64-apple-darwin --bundles app,dmg \
   --config tools/zh-cn/tauri.zh-cn.conf.json
+node tools/zh-cn/verify.mjs          # 12 项产物断言
+npm run zh-cn:audit                  # 还差哪些可见文案
 ```
+
+`--bundles app,dmg` 两个都要：只打包 dmg 时 tauri 会清掉 `.app`，`verify.mjs` 就无从校验二进制的架构与签名。
 
 `tauri build` 会执行覆盖配置里的 `beforeBuildCommand`（`node tools/zh-cn/build.mjs`），它先 `tsc` + `vite build`，再注入 `dist/zh-cn.js`。**不要**在 `tauri build` 之前手工 `npm run build` 指望注入留在产物里——tauri 会重跑前端构建并覆盖 `dist/`。
 
@@ -73,8 +83,12 @@ npx tauri build --target aarch64-apple-darwin --bundles dmg \
 
 ## 已知边界
 
-- 运行时层只替换**完全匹配**的文本，所以带插值的句子依赖 `{0}` 模板（`Open {0}` 这类），模板规则在 `lib/collect.mjs` 里按「每一段都得像人话」判定。
+- 运行时层只替换**完全匹配**的文本，所以带插值的句子依赖 `{0}` 模板（`Open {0}` 这类）。模板是否算文案由 `lib/collect.mjs` 判定：整段 Tailwind 占比 >0.4、或形如 `translateY({0}px)`、`{0}px`、`commit:{0}:{1}`、`<xml>{0}</xml>` 的一律排除。
+- 中文不区分单复数，`${n} ${n===1?"model":"models"} available.` 的第二个占位符会被译文丢掉；运行时按顺序替换，缺的槽位不渲染。
+- JSX 里的三元、`&&`、`??` 会被展开取全部分支，所以 `available ? "${n} models available." : hint()` 两个分支都能译到。
 - `code`/`pre`/`kbd`/`textarea`，以及带 `translate="no"` 或 `cm-content` 类的节点不翻译，避免动到用户内容与代码编辑器。
 - 没有 Apple Developer 证书时产物是 ad-hoc 签名、未公证：首次打开需右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/MonoCode.app`。
 - 上游若重命名菜单 id 或改文案，`zh_cn.rs` 的 `BY_ID`/`BY_TEXT` 会按新抽取结果自动重建；没覆盖到的项保持英文而不是报错。
-- 机器翻译会出错，尤其是长句。术语表 `glossary.json` 是纠正译法的最省力位置。
+- 机器翻译会出错，尤其是长句。纠错优先级：`overrides.json`（人工订正，最高） > `glossary.json`（术语） > 模型输出。
+- 审计输出里剩下的多为例值（`https://gitlab.com`、`feature/my-task`、`glpat-…`）、品牌名与路径，属于预期不译。`node tools/zh-cn/audit.mjs` 会打印它们及出处。
+- 本机验证范围：菜单栏、菜单项与注入字典已实测；界面正文用 happy-dom 跑运行时脚本验证，未做真实窗口截图（受屏幕锁定限制）。
