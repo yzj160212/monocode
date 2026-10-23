@@ -91,7 +91,7 @@ jobs:
           set -euo pipefail
           git fetch --depth=1 origin "$STATE_BRANCH" || exit 0
           mkdir -p .zh-cn
-          git show "FETCH_HEAD:$DICT_PATH" > "$DICT_PATH" 2>/dev/null || true
+          git show "FETCH_HEAD:$DICT_PATH" > "$DICT_PATH" 2>/dev/null || rm -f "$DICT_PATH"
           if [ -s "$DICT_PATH" ]; then
             echo "已恢复字典：$(node -p "Object.keys(require('./$DICT_PATH').entries).length") 条"
           fi
@@ -143,7 +143,9 @@ jobs:
           VERSION: ${{ needs.gate.outputs.version }}
         run: |
           set -euo pipefail
-          SRC=$(ls target/aarch64-apple-darwin/release/bundle/dmg/*.dmg | head -1)
+          # find 而不是 ls：dmg 名带空格时 ls 会把一个文件名拆成多个。
+          SRC=$(find target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)
+          [ -n "$SRC" ] || { echo "::error::未找到 DMG"; exit 1; }
           OUT="MonoCode_${VERSION}_aarch64_zh-CN.dmg"
           cp "$SRC" "$OUT"
           shasum -a 256 "$OUT" > "$OUT.sha256"
