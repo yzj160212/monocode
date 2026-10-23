@@ -27,6 +27,12 @@ export const UI_PROPS = new Set([
 ]);
 
 const PLACEHOLDER = "\u0000";
+
+/** A template whose literals are CSS values, units or transform helpers. */
+const LOOKS_LIKE_CSS_VALUE = /^\s*(?:-?\d*\.?\d*\s*(?:px|rem|em|%|vh|vw|fr|deg|ms|s)?\s*)+$/i;
+
+/** CSS units and function names that must never count as words. */
+const CSS_UNITS = new Set(["px", "rem", "em", "vw", "vh", "fr", "deg", "ms", "s", "pct"]);
 const PLACEHOLDER_TEXT_RX = /\{\d+\}/g;
 
 /**
@@ -46,9 +52,44 @@ function templatePattern(node) {
   // Semicolons are ordinary prose ("in the background; ⌘Return …"), and
   // braces are already rejected by looksLikeUiText below.
   if (cssTokenRatio(literal) > 0.4) return null;
-  // Real copy carries at least one phrase, not just an identifier.
-  if (!/[A-Za-z]{3,}/.test(literal)) return null;
-  if (!looksLikeUiText(literal, { maxLength: 700 })) return null;
+  // CSS values and transform helpers: `{0}px`, `translateY({0}px)`, `{0} %`.
+  if (LOOKS_LIKE_CSS_VALUE.test(literal)) return null;
+  // Transform / filter / calc helpers wrap their arguments in parentheses.
+  if (/^(?:-?[a-z]+|[a-z]\w*)\(/i.test(literal)) return null;
+  // Scheme-like fragments (`file:{0}`, `mono:{0}`, `data:{0};base64,{1}`,
+  // `--port={0}`, `[data-x="{0}"]`) are protocol plumbing, never copy.
+  if (/^(?:[a-z][a-z0-9+.-]*:\{|--|\[)/.test(literal)) return null;
+  // Key composition (`commit:{0}:{1}`, `hunk:{0}:{1}`, `data:{0};base64,{1}`).
+  // A real sentence has words between the colons, these do not.
+  if (/^[a-z][a-z0-9]*:/.test(literal) && !/\s[A-Za-z]{3,}/.test(literal)) return null;
+  // A single token ending in a colon or comma is a prefix fragment
+  // (`mono:{0}`, `name: {0}`), not a sentence; trailing punctuation such as
+  // "available." is prose.
+  const tokens = literal.split(/\s+/).filter(Boolean);
+  if (tokens.length === 1 && /[:;,=]$/.test(literal)) return null;
+  // Prompt scaffolding: XML-wrapped context blocks sent to a model.
+  if (/^\s*</.test(literal)) return null;
+  // Generated identifiers (`field_{0}`, `mc_turn_{0}`, `monocode_{0}`).
+  if (/^[a-z][a-z0-9_]*_$/.test(literal) || /^[a-z][a-z0-9_]*_\s/.test(literal)) return null;
+  if (literal.split(/\s+/).length === 1 && literal.includes("_")) return null;
+  // A single short token is a unit, not copy.
+  if (literal.replace(/[^A-Za-z]/g, "").length < 4) return null;
+  // A lone trailing word is still copy when the sentence is carried by the
+  // interpolation: `${n} ${plural} available.` yields the segment "available.".
+  // Require real words (not CSS units) and no markers.
+  if (!looksLikeUiText(literal, { maxLength: 700 })) {
+    // Interpolations can carry the sentence (`${n} ${plural} available.`), so a
+    // short plain-word tail still counts. CSS units and transforms do not.
+    const words = literal.replace(/[^A-Za-z\s]/g, "").trim().split(/\s+/).filter(Boolean);
+    const plain = words.length > 0 && words.length <= 3 &&
+      words.every((word) => word.length >= 4 && !CSS_UNITS.has(word));
+    if (!plain) return null;
+    // Every segment must be created by the template itself, not a function
+    // call: `translateY({0}px)` has one segment only and no words.
+    const segmentsWithWords = segments.filter((segment) => /[A-Za-z]{4,}/.test(segment));
+    if (segmentsWithWords.length === 0) return null;
+    if (/[A-Z]/.test(literal)) return null;
+  }
   let index = 0;
   return text.replace(/\u0000/g, () => `{${index++}}`);
 }
@@ -88,6 +129,49 @@ export function collectAll(ts, sourceFile, code) {
     return undefined;
   };
 
+  /**
+   * Every value an expression can actually produce.
+   *
+   * UI slots are often `available ? \`\${n} models available.\` : hint()`, and
+   * both branches are copy. Descending through ternaries, `&&` and `??` is the
+   * difference between translating that description and leaving it English.
+   */
+  const leaves = (node, depth = 0) => {
+    if (!node || depth > 6) return [];
+    const current = unwrap(node);
+    if (!current) return [];
+    if (ts.isConditionalExpression(current)) {
+      return [...leaves(current.whenTrue, depth + 1), ...leaves(current.whenFalse, depth + 1)];
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken) {
+      const kind = current.operatorToken.kind;
+      if (
+        kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        kind === ts.SyntaxKind.BarBarToken ||
+        kind === ts.SyntaxKind.QuestionQuestionToken
+      ) {
+        return [...leaves(current.left, depth + 1), ...leaves(current.right, depth + 1)];
+      }
+    }
+    if (ts.isCallExpression(current)) return [];
+    return [current];
+  };
+
+  /** Records a UI value: literal, template pattern, or nothing. */
+  const addSlotValue = (expression, kind) => {
+    for (const leaf of leaves(expression)) {
+      const text = stringOf(leaf);
+      if (text !== undefined) {
+        addExact(text, kind);
+        continue;
+      }
+      if (ts.isTemplateExpression(leaf)) {
+        const pattern = templatePattern(leaf);
+        if (pattern) addPattern(pattern, kind);
+      }
+    }
+  };
+
   const unwrap = (node) => {
     let current = node;
     while (
@@ -109,37 +193,17 @@ export function collectAll(ts, sourceFile, code) {
     if (ts.isJsxText(node)) {
       addExact(node.getText(sourceFile), "jsx");
     } else if (ts.isJsxAttribute(node) && node.name && ts.isIdentifier(node.name) && UI_ATTRS.has(node.name.text)) {
-      const value = unwrap(node.initializer);
-      const text = stringOf(value);
-      if (text !== undefined) {
-        addExact(text, "attr");
-      } else if (value && ts.isTemplateExpression(value)) {
-        // A template inside description/title: the prose around the
-        // interpolation is copy, so it needs a pattern entry.
-        const pattern = templatePattern(value);
-        if (pattern) addPattern(pattern, "attr");
-      }
+      addSlotValue(node.initializer, "attr");
     } else if (ts.isJsxExpression(node)) {
-      const expr = unwrap(node.expression);
-      const text = stringOf(expr);
-      if (text !== undefined) {
-        const parent = node.parent;
-        const inSlot =
-          ts.isJsxElement(parent) || ts.isJsxFragment(parent) ||
-          (ts.isJsxAttribute(parent) && parent.name && ts.isIdentifier(parent.name) && UI_ATTRS.has(parent.name.text));
-        if (inSlot) addExact(text, "jsexpr");
-      }
+      const parent = node.parent;
+      const inSlot =
+        ts.isJsxElement(parent) ||
+        ts.isJsxFragment(parent) ||
+        (ts.isJsxAttribute(parent) && parent.name && ts.isIdentifier(parent.name) && UI_ATTRS.has(parent.name.text));
+      if (inSlot) addSlotValue(node.expression, "jsexpr");
     } else if (ts.isPropertyAssignment(node) && node.name) {
       const key = ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : undefined;
-      if (key && UI_PROPS.has(key)) {
-        const value = unwrap(node.initializer);
-        const text = stringOf(value);
-        if (text !== undefined) addExact(text, "prop");
-        else if (value && ts.isTemplateExpression(value)) {
-          const pattern = templatePattern(value);
-          if (pattern) addPattern(pattern, "prop");
-        }
-      }
+      if (key && UI_PROPS.has(key)) addSlotValue(node.initializer, "prop");
     } else if (ts.isTemplateExpression(node)) {
       if (!(node.parent && ts.isTaggedTemplateExpression(node.parent))) {
         const pattern = templatePattern(node);

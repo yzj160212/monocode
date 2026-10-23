@@ -24,7 +24,9 @@ const SYSTEM = `你是资深 macOS 桌面软件本地化译者，把英文 UI �
 规则：
 1. 只输出 JSON 对象，键与输入的英文完全一致，值为译文。不要解释、不要 markdown 围栏。
 2. 译文简洁，符合中文软件界面习惯：按钮/菜单用动词短语（"Save Changes" -> "保存更改"），名词短语保持短（"No project folder" -> "无项目文件夹"）。
-3. 占位符必须原样保留且顺序不变：{0}、{1}、%s、%d、{{name}}、\\n、↩、⌘ 等；占位符数量与输入相同。
+3. 占位符（{0}、{1}、%s、%d、{{name}}、\\n、↩、⌘）原样保留，顺序可随中文语序调整。
+   例外：如果某个占位符只承载英文单复数（例如数量 + 单复数词 + "available." 这种写法里的第二个占位符），
+   中文不区分单复数，必须省略它，只保留数量占位符。
 4. 品牌与产品名不翻译：MonoCode、Claude Code、Codex、Cursor、Grok、OpenCode、Antigravity、Devin、Pi、omp、fx、Hermes、GitHub、Git、Linear、Jira、Slack、macOS、Windows、Linux、Node.js、Rust、npm、MCP、LLM、API、URL、CLI、JSON、SSH、PTY。
 5. 快捷键写法不翻译：Cmd+K、Ctrl+Shift+P、⌘K、⌥、⇧、↩、⎋、Esc、Enter 等保持原样。
 6. 标点：句末不加句号；疑问句用 "？"；列举用 "、"；省略号沿用 "…"；括号用全角（）。
@@ -95,6 +97,15 @@ function loadSeed(root) {
   return file ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
 }
 
+/** Hand-fixed translations that win over the model. */
+function loadOverrides(root) {
+  const file = path.join(root, "tools", "zh-cn", "overrides.json");
+  if (!fs.existsSync(file)) return {};
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete parsed._comment;
+  return parsed;
+}
+
 /** Strings that must stay English (internal logs, protocol constants). */
 function loadKeep(root) {
   const file = path.join(root, "tools", "zh-cn", "keep.txt");
@@ -114,17 +125,21 @@ function loadGlossary(root) {
 }
 
 /**
- * Both sides must carry the same placeholders, in any order.
+ * Placeholder compatibility between source and translation.
  *
- * Chinese word order routinely flips them ("Couldn't {0} on {1}" becomes
- * "无法在 {1} 上{0}"), so ordering cannot be part of the check, but losing or
- * duplicating one would break the interpolation.
+ * Order may change: Chinese flips them ("Couldn't {0} on {1}" becomes
+ * "无法在 {1} 上{0}"). A translation may also drop at most one placeholder, and
+ * only when the source has two or more, which is the pluralisation idiom:
+ * `${n} ${n===1?"model":"models"} available.` becomes `{0} 个模型可用`, and the
+ * unused slot is simply never substituted. Adding or duplicating is refused.
  */
 function placeholdersMatch(source, translated) {
   const a = (source.match(PLACEHOLDER) || []).sort();
   const b = (translated.match(PLACEHOLDER) || []).sort();
-  if (a.length !== b.length) return false;
-  return a.every((token, index) => token === b[index]);
+  if (b.some((token) => !a.includes(token))) return false;
+  if (new Set(b).size !== b.length) return false;
+  if (a.length === b.length) return true;
+  return a.length - b.length === 1 && a.length >= 2;
 }
 
 /**
@@ -205,6 +220,7 @@ async function main() {
   dictionary.untranslated ??= {};
   const glossary = loadGlossary(root);
   const forcedKeep = loadKeep(root);
+  const overrides = loadOverrides(root);
 
   const keepWords = [...new Set([...KEEP, ...Object.keys(glossary)])].sort((a, b) => b.length - a.length);
 
@@ -354,6 +370,14 @@ async function main() {
   for (const english of worklist.menu.titles) {
     const zh = dictionary.entries[english];
     if (zh) dictionary.menu.byText[english] = zh;
+  }
+
+  // Hand-fixed translations win, and count as covered.
+  for (const [source, value] of Object.entries(overrides)) {
+    if (!required.has(source)) continue;
+    store(source, value);
+    dictionary.kept[source] = 0;
+    delete dictionary.untranslated[source];
   }
 
   // Drop entries for strings upstream no longer has.
