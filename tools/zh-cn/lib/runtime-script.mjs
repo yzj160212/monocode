@@ -7,10 +7,13 @@
  * attribute at the DOM level is provably safe, and it keeps the upstream tree
  * untouched so `git pull` never conflicts.
  *
- * Two things are translated here:
- *   - exact strings: a text node / attribute equals a dictionary key
- *   - patterns: a text node matches `Open {0}` style templates, with the
- *     interpolated part kept verbatim
+ * Three rewrite shapes:
+ *   1. exact      - a text node or attribute equals a dictionary key
+ *   2. pattern    - a text node matches `Open {0}`, keeping the interpolated part
+ *   3. split      - React rendered one sentence as sibling text nodes because a
+ *                   JSX expression sat in the middle
+ *                   (`Select the activity on one of ` + name + `'s messages …`);
+ *                   the sibling run is joined, matched, and rewritten
  */
 
 /** @param {{entries: Record<string,string>, patterns?: Record<string,string>}} payload */
@@ -23,9 +26,7 @@ export function renderRuntimeScript(payload, { hash = "dev" } = {}) {
 
   var EXACT = ${entries};
   var PATTERN = ${patterns};
-  var ATTRS = [
-    "title", "placeholder", "aria-label", "aria-description", "alt", "summary",
-  ];
+  var ATTRS = ["title", "placeholder", "aria-label", "aria-description", "alt", "summary"];
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, CODE: 1, PRE: 1, KBD: 1, TEXTAREA: 1 };
 
   // Compile patterns once: "Open {0}" -> /^Open (.*)$/
@@ -122,6 +123,52 @@ export function renderRuntimeScript(payload, { hash = "dev" } = {}) {
       if (node.nodeType === 3) textNode(node);
       else element(node);
     }
+    splitSentences(root);
+  }
+
+  /**
+   * Rewrite a sentence React split across sibling text nodes.
+   *
+   * Only runs of text nodes separated by non-text (element) nodes are joined,
+   * and only when a tainted node still carries one of the pattern fragments —
+   * so a match is always anchored on translated copy, never on user content.
+   */
+  function splitSentences(root) {
+    var container = root.nodeType === 1 ? root : (root.parentElement || document.body);
+    if (!container) return;
+    var runs = [];
+    var current = [];
+    var collect = function (el) {
+      var kids = el.childNodes;
+      for (var i = 0; i < kids.length; i += 1) {
+        var k = kids[i];
+        if (k.nodeType === 3) {
+          current.push(k);
+        } else {
+          if (current.length > 1) runs.push(current);
+          current = [];
+          if (k.nodeType === 1) collect(k);
+        }
+      }
+      if (current.length > 1) runs.push(current);
+      current = [];
+    };
+    collect(container);
+
+    for (var r = 0; r < runs.length; r += 1) {
+      var nodes = runs[r];
+      if (nodes.length > 6) continue;
+      var text = "";
+      for (var n = 0; n < nodes.length; n += 1) text += nodes[n].nodeValue;
+      if (skip(nodes[0])) continue;
+      var next = translate(text.replace(/\\s+/g, " "));
+      if (next === null) continue;
+      // One slot may swallow several original nodes; keep the exact characters
+      // the placeholder captured so the joined text stays faithful.
+      var parts = trimParts(next);
+      nodes[0].nodeValue = parts[0] + parts[1] + parts[2];
+      for (var m = 1; m < nodes.length; m += 1) nodes[m].nodeValue = "";
+    }
   }
 
   // Keep our own writes from re-entering the observer.
@@ -156,8 +203,6 @@ export function renderRuntimeScript(payload, { hash = "dev" } = {}) {
   function start() {
     document.documentElement.lang = "zh-CN";
     walk(document);
-    // React mounts and re-renders constantly; observe after the first paint so
-    // the initial pass is not split across thousands of mutation records.
     observe();
     var timer = setInterval(function () {
       if (!document.getElementById("root")) return;

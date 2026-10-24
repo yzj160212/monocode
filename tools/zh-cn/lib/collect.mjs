@@ -10,7 +10,7 @@
  * Nothing here mutates source files: translation is applied to the built DOM
  * and to the native menu at runtime, so upstream refactors never conflict.
  */
-import { cssTokenRatio, looksLikeUiText } from "./filters.mjs";
+import { cssTokenRatio, decodeEntities, isCssToken, looksLikeUiText } from "./filters.mjs";
 
 export const UI_ATTRS = new Set([
   "title", "placeholder", "aria-label", "ariaLabel", "alt", "label", "description",
@@ -18,6 +18,14 @@ export const UI_ATTRS = new Set([
   "emptyLabel", "noResultsText", "searchPlaceholder", "promptText", "helperText",
   "aria-description", "summary", "caption",
 ]);
+
+/**
+ * Search-index fields. These strings are never rendered: they only feed the
+ * settings search. Their shape (a run of lowercase keywords) is what an earlier
+ * heuristic used to guess "this is not copy", which also swallowed real
+ * sentences such as "does not support manual compaction".
+ */
+export const INDEX_PROPS = new Set(["keywords", "searchTerms", "searchKeywords", "indexTerms"]);
 
 export const UI_PROPS = new Set([
   "label", "title", "description", "placeholder", "message", "text", "heading",
@@ -48,12 +56,21 @@ function templatePattern(node) {
   if (!/[A-Za-z]{2,}/.test(text)) return null;
   const segments = text.split(PLACEHOLDER).map((segment) => segment.trim()).filter(Boolean);
   const literal = segments.join(" ");
+  // A template whose only literal is `Label:` is ambiguous: "Model: {0}" is a
+  // UI label, "Ultrathink:\n{0}" is a model instruction marker. Both
+  // look identical here, so the marker is listed in keep.txt instead — this
+  // rule only rejects ones with no letters after the colon at all.
   if (!literal) return null;
-  // Semicolons are ordinary prose ("in the background; ⌘Return …"), and
-  // braces are already rejected by looksLikeUiText below.
-  if (cssTokenRatio(literal) > 0.4) return null;
-  // CSS values and transform helpers: `{0}px`, `translateY({0}px)`, `{0} %`.
+  // Layout strings are all utilities; copy is not. A ratio alone misfires on
+  // short literals — "sign-in required" is 50% "CSS-ish" by token shape — so
+  // require every token to look like a utility before trusting the ratio.
+  const literalTokens = literal.split(/\s+/).filter(Boolean);
+  const allUtilities = literalTokens.length > 0 && literalTokens.every(isCssToken);
+  if (allUtilities || (literalTokens.length >= 4 && cssTokenRatio(literal) > 0.4)) return null;
+  // CSS values and transform helpers: `{0}px`, `translateY({0}px)`, `{0} %`,
+  // and grid shorthand such as `{0}px minmax(0, 1fr)`.
   if (LOOKS_LIKE_CSS_VALUE.test(literal)) return null;
+  if (/minmax\(|repeat\(|calc\(/.test(literal)) return null;
   // Transform / filter / calc helpers wrap their arguments in parentheses.
   if (/^(?:-?[a-z]+|[a-z]\w*)\(/i.test(literal)) return null;
   // Scheme-like fragments (`file:{0}`, `mono:{0}`, `data:{0};base64,{1}`,
@@ -62,12 +79,26 @@ function templatePattern(node) {
   // Key composition (`commit:{0}:{1}`, `hunk:{0}:{1}`, `data:{0};base64,{1}`).
   // A real sentence has words between the colons, these do not.
   if (/^[a-z][a-z0-9]*:/.test(literal) && !/\s[A-Za-z]{3,}/.test(literal)) return null;
-  // A single token ending in a colon or comma is a prefix fragment
-  // (`mono:{0}`, `name: {0}`), not a sentence; trailing punctuation such as
-  // "available." is prose.
+  // A single lowercase token ending in a colon/comma/equals is protocol
+  // plumbing (`mono:`, `remote:`, `?v=`, `session-changes:`). A capitalised
+  // token is a label prefix and very much copy ("Model: {0}", "Checks: {0}").
   const tokens = literal.split(/\s+/).filter(Boolean);
-  if (tokens.length === 1 && /[:;,=]$/.test(literal)) return null;
-  // Prompt scaffolding: XML-wrapped context blocks sent to a model.
+  if (tokens.length === 1 && /[:;,=]$/.test(literal) && /^[a-z?]/.test(literal)) return null;
+  // Storage keys assembled from slots (`{0}:message:{1}:{2}`,
+  // `session-changes:{0}:{1}`, `monocode.remote-command.v1:{0}:`) are
+  // identifiers. A sentence keeps whole words separated by spaces, and its
+  // separators are surrounded by prose ("Could not {0}: {1}").
+  const looksLikeKey = (segment) => {
+    if (/\s/.test(segment)) return false; // "no local file path" -> prose
+    if (/^(?:[a-z][\w-]*\.)+[\w.-]+:?$/i.test(segment)) return true; // dotted ns
+    // Separators with no surrounding prose: ":" , ":message:" , "label:".
+    if (/^[:.,;=]+$/.test(segment)) return true;
+    if (/^:[a-z][\w-]*:\s*$/i.test(segment)) return true;
+    return /^-?[a-z][\w-]*:\s*$/.test(segment);
+  };
+  if (segments.every(looksLikeKey)) return null;
+  // Prompt scaffolding: XML-wrapped context blocks sent to a model, and
+  // instruction prefixes such as `Ultrathink:\n{0}`.
   if (/^\s*</.test(literal)) return null;
   // Generated identifiers (`field_{0}`, `mc_turn_{0}`, `monocode_{0}`).
   if (/^[a-z][a-z0-9_]*_$/.test(literal) || /^[a-z][a-z0-9_]*_\s/.test(literal)) return null;
@@ -106,7 +137,9 @@ export function collectAll(ts, sourceFile, code) {
   const patterns = new Map(); // pattern -> kinds Set
 
   const addExact = (text, kind) => {
-    const normalized = text.replace(/\s+/g, " ").trim();
+    // Decode entities first: JSX text `&apos;s` renders as `'s`, so the
+    // dictionary key must match what React puts in the DOM.
+    const normalized = decodeEntities(text).replace(/\s+/g, " ").trim();
     // JSX text and UI attributes are rendered by definition, so a bare word is
     // copy there. A loose literal must look like a sentence: "growth" beside
     // `status === "growth"` is an enum, not a label.
@@ -121,6 +154,17 @@ export function collectAll(ts, sourceFile, code) {
   const addPattern = (text, kind) => {
     if (!patterns.has(text)) patterns.set(text, new Set());
     patterns.get(text).add(kind);
+  };
+
+  /** Whether this literal is an argument of split()/join()/replace(). */
+  const isListDelimiter = (node) => {
+    let current = node.parent;
+    while (current && (ts.isAsExpression(current) || ts.isParenthesizedExpression(current))) current = current.parent;
+    if (!current) return false;
+    const call = ts.isCallExpression(current) ? current : ts.isCallExpression(current.parent) ? current.parent : null;
+    if (!call || !ts.isPropertyAccessExpression(call.expression)) return false;
+    const name = call.expression.name.text;
+    return name === "split" || name === "join" || name === "replace" || name === "replaceAll";
   };
 
   const stringOf = (node) => {
@@ -189,6 +233,37 @@ export function collectAll(ts, sourceFile, code) {
     return current;
   };
 
+  /**
+   * A sentence split across a JSX child expression:
+   *   Select the activity on one of {name}&apos;s messages to see each step.
+   * React renders two text nodes, so the runtime cannot match either half.
+   * Emit a pattern keyed on the concatenation, which the runtime path handles.
+   */
+  const addSplitSentence = (children) => {
+    for (let i = 0; i + 2 < children.length; i += 1) {
+      const head = children[i];
+      const middle = children[i + 1];
+      const tail = children[i + 2];
+      if (!ts.isJsxText(head) || !ts.isJsxExpression(middle) || !ts.isJsxText(tail)) continue;
+      // Only a value expression may sit between the halves; a nested element
+      // (icon, link) would break the text-node assumption.
+      if (!middle.expression || ts.isJsxElement(middle.expression) || ts.isJsxFragment(middle.expression)) continue;
+
+      const before = decodeEntities(head.text).replace(/\s+/g, " ").trim();
+      const after = decodeEntities(tail.text).replace(/\s+/g, " ").trim();
+      if (!before || !after) continue;
+      if (!/[a-z]{3,}/.test(before) || !/[a-z]{3,}/.test(after)) continue;
+
+      // The rendered text joins them with a space unless one side already ends
+      // or starts with punctuation.
+      const needsSpaceBefore = !/[\s(\[{]$/.test(before);
+      const needsSpaceAfter = !/^[\s.,;:!?)\]}]/.test(after);
+      const pattern = `${before}${needsSpaceBefore ? " " : ""}{0}${needsSpaceAfter ? " " : ""}${after}`;
+      if (!looksLikeUiText(pattern, { maxLength: 700 })) continue;
+      addPattern(pattern, "split");
+    }
+  };
+
   const visit = (node) => {
     if (ts.isJsxText(node)) {
       addExact(node.getText(sourceFile), "jsx");
@@ -201,8 +276,13 @@ export function collectAll(ts, sourceFile, code) {
         ts.isJsxFragment(parent) ||
         (ts.isJsxAttribute(parent) && parent.name && ts.isIdentifier(parent.name) && UI_ATTRS.has(parent.name.text));
       if (inSlot) addSlotValue(node.expression, "jsexpr");
+    } else if (ts.isJsxElement(node)) {
+      addSplitSentence([...node.children]);
+      addSlotValue === undefined; // keep lint quiet about the helper above
     } else if (ts.isPropertyAssignment(node) && node.name) {
       const key = ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : undefined;
+      // Skip search-index fields: they are not rendered anywhere.
+      if (key && INDEX_PROPS.has(key)) return;
       if (key && UI_PROPS.has(key)) addSlotValue(node.initializer, "prop");
     } else if (ts.isTemplateExpression(node)) {
       if (!(node.parent && ts.isTaggedTemplateExpression(node.parent))) {
@@ -211,6 +291,9 @@ export function collectAll(ts, sourceFile, code) {
       }
     } else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       if (node.parent && ts.isImportDeclaration(node.parent)) return;
+      // A literal handed to split()/join() is a delimiter or a word list, never
+      // rendered: STOPWORDS = "the and for ...".split(" ").
+      if (isListDelimiter(node)) return;
       if (isProseLiteral(node.text)) addExact(node.text, "literal");
     }
     ts.forEachChild(node, visit);

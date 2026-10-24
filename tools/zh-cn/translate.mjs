@@ -108,14 +108,25 @@ function loadOverrides(root) {
 
 /** Strings that must stay English (internal logs, protocol constants). */
 function loadKeep(root) {
-  const file = path.join(root, "tools", "zh-cn", "keep.txt");
-  if (!fs.existsSync(file)) return new Set();
-  return new Set(
-    fs.readFileSync(file, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#")),
-  );
+  const dir = path.join(root, "tools", "zh-cn");
+  const keys = new Set();
+  // keep.txt: one key per line, for copy-pasteable strings.
+  const plain = path.join(dir, "keep.txt");
+  if (fs.existsSync(plain)) {
+    for (const line of fs.readFileSync(plain, "utf8").split("\n")) {
+      const key = line.trim();
+      if (key && !key.startsWith("#")) keys.add(key);
+    }
+  }
+  // keep.json: an array of keys, for strings containing newlines that a
+  // line-per-key file cannot express.
+  const json = path.join(dir, "keep.json");
+  if (fs.existsSync(json)) {
+    const parsed = JSON.parse(fs.readFileSync(json, "utf8"));
+    const list = Array.isArray(parsed) ? parsed : parsed.keys ?? [];
+    for (const key of list) keys.add(key);
+  }
+  return keys;
 }
 
 function loadGlossary(root) {

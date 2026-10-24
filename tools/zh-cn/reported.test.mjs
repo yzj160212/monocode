@@ -61,7 +61,62 @@ const SAMPLE = [
   "Delete",
   "Catch-up window for missed runs",
   "Go to File (type > for commands)",
+  // Second round: sentences whose shape tripped a heuristic.
+  "Your machines",
+  "Run agents on another computer and return to them from your laptop. The host keeps working when you close MonoCode here.",
+  "Configured servers for the selected project and your provider accounts.",
+  "Check on projects and conversations from the MonoCode mobile app. Your phone connects straight to this desktop.",
+  "Antigravity session stopped during startup",
+  "Claude usage unavailable",
+  "Missing Linear issue",
+  "Unknown inbox item",
+  "Build approved plan",
+  "Devin session stopped",
+  "OpenCode session failed.",
+  "(Empty. Nothing has been remembered yet.)",
+  "(optional)",
 ];
+
+test("template labels translate without being read as a protocol key or shortcut", () => {
+  const window = new Window({ url: "http://localhost/" });
+  const cases = [
+    "Model: gpt-4.1",
+    "Thinking: high effort",
+    "Workspace: my-app",
+    "Remove main from this desktop?",
+    "Show 3 more annotations",
+  ];
+  const paragraphs = cases.map((copy) => {
+    const p = window.document.createElement("p");
+    p.textContent = copy;
+    window.document.body.appendChild(p);
+    return p;
+  });
+
+  window.eval(renderRuntimeScript(runtimePayload(), { hash: "test" }));
+
+  cases.forEach((source, index) => {
+    const rendered = paragraphs[index].textContent.trim();
+    assert.match(rendered, /[\u4e00-\u9fa5]/, `no Chinese for: ${source}`);
+    // The interpolated value must survive the rewrite.
+    const value = source.split(/[:?]/)[1] ?? source.split(" ")[1];
+    assert.ok(rendered.includes(value.trim().split(" ")[0]), `lost value in: ${rendered}`);
+  });
+});
+
+test("a sentence split across sibling text nodes still translates", () => {
+  const window = new Window({ url: "http://localhost/" });
+  const p = window.document.createElement("p");
+  p.appendChild(window.document.createTextNode("Say hello to "));
+  p.appendChild(window.document.createTextNode("Mono"));
+  p.appendChild(window.document.createTextNode(", ask a question, or hand over some work."));
+  window.document.body.appendChild(p);
+
+  window.eval(renderRuntimeScript(runtimePayload(), { hash: "test" }));
+
+  assert.match(p.textContent, /[\u4e00-\u9fa5]/, `no Chinese: ${p.textContent}`);
+  assert.match(p.textContent, /Mono/, "interpolated value must survive");
+});
 
 test("previously missed strings now translate", () => {
   const window = new Window({ url: "http://localhost/" });

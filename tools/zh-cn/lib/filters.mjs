@@ -17,10 +17,12 @@ const NON_PROSE = [
   /^[A-Z][A-Z0-9_]+$/, // CONSTANTS
   /^[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*$/, // camelCase
   /^[a-z0-9]+(?:[-_.][a-z0-9]+)+$/, // kebab / snake / dotted
-  /^(?:Cmd|Ctrl|Alt|Shift|Option|Command)[+\s]/, // accelerators
-  /^(?:App|Tab|Pane|Terminal|Editor|View|Window|File|Help|Tools|Sessions?|Settings|Provider|Agents?|Workspace|Monos?|Notes|Inbox|Search|Projects|Skills|Automations|Notifications):\s/,
+  // A keyboard chord: modifier(s) joined by "+" and a single key. Anchored to
+  // the whole string so "Command Palette" (a real label) is not caught.
+  /^(?:(?:Cmd|Ctrl|Alt|Option|Shift|Command|CmdOrCtrl|Super|Meta)\+)+[A-Za-z0-9[\]`=,\-./';\\]$/,
   /^[^\s]+\.(?:ts|tsx|js|jsx|json|md|css|scss|html|png|jpe?g|gif|svg|dmg|app|rs|toml|lock|sha256|txt|yml|yaml|mjs|cjs|exe|zip|plist|db)$/i,
-  /^(?:rgb|hsl|var|url|data|calc|linear-gradient|minmax|repeat|translate|rotate|scale|inset|circle|ellipse|polygon|color-mix)\(/i,
+  /^(?:rgb|hsl|var|url|data|calc|minmax|repeat|inset|circle|ellipse|polygon|color-mix)\(/i,
+  /^[a-z-]*gradient\(/i, // linear/radial/conic gradients
   /^(?:monocode|tauri|vscode|window|app)\.[\w.]+$/,
   /\{\{|\}\}|\$\{|\{\s*\w+\s*\}/, // template placeholders
   /%[sd@]/,
@@ -39,7 +41,6 @@ const NON_PROSE = [
   /^[.!\/](?!\s)[^\s]/, // selectors, negated expressions, paths
   /&&|\|\||=>|===|!==/, // code expressions
   /^-\s/, // yaml / markdown list scaffolding
-  /^(?:[a-z']{1,10}\s+){4,}[a-z']{1,12}$/, // keyword dumps without capitals
   /^[Mm]\d/, // svg path data
   /^[~$@]|^\.\//, // paths and identifiers: ~/.agents/skills, ./src
   /^[\w+-]+\/[\w+./-]+$/, // mime types and protocol paths: image/svg+xml
@@ -49,6 +50,21 @@ const NON_PROSE = [
   /^</, // markup: <svg xmlns=...>
   /\bxmlns=/, // inline svg markup
   /^(?:curl|npm|npx|node|git|brew|pip|sudo|cargo|sh|bash)\s/, // shell commands
+  // Remaining CSS shapes: colours, value shorthands, transforms, selectors.
+  /#[0-9a-f]{3,8}\b/i, // hex colours
+  /(?:^|\s)(?:\d+(?:\.\d+)?(?:px|rem|em|%)\s+solid|underline\s+wavy)\b/, // border / text-decoration
+  /^(?:transform|transition|animation|filter)\s/, // style properties
+  /^(?:translate|scale|rotate)[XYZ3d]*\(/, // transform helpers
+  /@(?:min|max|container|sm|md|lg|xl|2xl)[-\[]/, // tailwind container queries
+  /^diff --git/, // git output
+  /^(?:irm|iwr|Invoke-WebRequest|choco|winget|apt|dnf|apk|snap)\s/, // other shell commands
+  /^(?:button|input|textarea|select|div|span|svg|path|a|p|ul|li)\b[^a-z]*\[/, // selector lists
+  // Validation messages for tool/automation schemas: they name a JSON field and
+  // are only seen by a model or a log, never by a user.
+  /^[a-z][\w.]*\s+(?:must be|should be|is required)\b/,
+  // Prompt and log lines: a colon-label followed by a url.
+  /^\w+:\s+https?:\/\//,
+  /^&[:.\[]/, // nested css selectors
   /^(?:\s*(?:as|async|await|break|const|continue|crate|dyn|else|enum|extern|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|true|type|unsafe|use|where|while)\s+){6,}/, // rust keyword dumps
   // API validation messages are lowercase and terse ("before is not a turn ID").
   // Prose that merely contains these words starts with a capital.
@@ -130,7 +146,11 @@ function looksLikeCss(text) {
   if (tokens.length === 0) return false;
   // A capitalised word breaks the CSS read ("Catch-up window for missed runs").
   if (tokens.some((token) => /^[A-Z][a-z]{2,}$/.test(token) || /[A-Z]/.test(token.slice(1)))) return false;
-  if (/^(?:@media|@supports)\b|^\(.*\)$/.test(text)) return true;
+  if (/^(?:@media|@supports)\b/.test(text)) return true;
+  // "(no text)" is copy; "(min-width: 600px)" is a media feature query. The
+  // colon (or comma) is what separates them — testing for "(" here would match
+  // the wrapper itself and reject every parenthesised label.
+  if (/^\(.*\)$/.test(text)) return /[:,]/.test(text);
   if (tokens.every((token) => CSS_BARE.has(token))) return true;
   // Numeric-only geometry: `-1px 0 0 0`.
   if (tokens.every((token) => /^(-?[\d.]+(?:px|rem|em|%|ms|s|fr|vh|vw)?,?|0)$/.test(token))) return true;
@@ -158,6 +178,14 @@ const SINGLE_WORD_LABELS = new Set([
   "on", "by", "and", "or", "to", "in", "no", "yes", "off", "auto", "manual",
 ]);
 
+/**
+ * Keyboard-shortcut command ids: "App: Settings", "Tab: Close All".
+ *
+ * Tested against the neutralised string, where a placeholder is U+0000 and not
+ * a letter: "Workspace: {0}" is a label, "Workspace: Settings" is an id.
+ */
+const COMMAND_ID = /^(?:App|Tab|Pane|Terminal|Editor|View|Window|File|Help|Tools|Sessions?|Settings|Provider|Agents?|Workspace|Monos?|Notes|Inbox|Search|Projects|Skills|Automations|Notifications):\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*$/;
+
 /** Git counters such as "Pull {0} commits from {1}" are copy. */
 const GIT_COPY = /^(?:Pull|Push|Merge|Rebase|Fetch|Sync)\b/;
 
@@ -167,10 +195,20 @@ const GIT_COPY = /^(?:Pull|Push|Merge|Rebase|Fetch|Sync)\b/;
  *   requireSentence: only accept phrase-shaped copy (used for literals outside
  *   known UI slots, where an enum value is more likely than a sentence).
  */
+/** HTML entities that JSX decodes before the text reaches the DOM. */
+const ENTITIES = { "&apos;": "'", "&quot;": '"', "&amp;": "&", "&lt;": "<", "&gt;": ">", "&nbsp;": " " };
+
+/** Decode the entities a browser would, so keys match rendered text. */
+export function decodeEntities(text) {
+  let out = text;
+  for (const [entity, char] of Object.entries(ENTITIES)) out = out.split(entity).join(char);
+  return out;
+}
+
 export function looksLikeUiText(raw, { maxLength = 220, requireSentence = false } = {}) {
   if (typeof raw !== "string") return false;
   // Placeholders are neutralised first so `{0}` never trips the code checks.
-  const s = raw.replace(PLACEHOLDER_TEXT, "\u0000").replace(/\s+/g, " ").trim();
+  const s = decodeEntities(raw.replace(PLACEHOLDER_TEXT, "\u0000")).replace(/\s+/g, " ").trim();
   const plain = s.replace(/\u0000/g, "X");
   if (plain.length < 2 || plain.length > maxLength) return false;
   if (!/[A-Za-z]{2,}/.test(plain)) return false;
@@ -181,6 +219,7 @@ export function looksLikeUiText(raw, { maxLength = 220, requireSentence = false 
   if (KEY_NAMES.test(plain)) return false;
   if (looksLikeTagList(plain)) return false;
   for (const pattern of NON_PROSE) if (pattern.test(plain)) return false;
+  if (COMMAND_ID.test(s)) return false;
 
   // "1 step", "3 commits": a count plus a unit is copy, not an enum value.
   if (/^\d+\s+[a-z]{2,}$/.test(plain)) return true;
@@ -196,10 +235,19 @@ export function looksLikeUiText(raw, { maxLength = 220, requireSentence = false 
 
   if (requireSentence) {
     const words = plain.split(/\s+/);
-    if (!/^[A-Z"'“‘(]/.test(plain)) return false;
-    if (words.length === 1 && !KEEP.has(plain) && !/^[A-Z][a-z]{3,}$/.test(plain)) return false;
-    if (words.length > 2 && !/[a-z]{3,}/.test(plain.slice(1))) return false;
+    // A single bare word is an enum value far more often than a label, unless
+    // it is a capitalised word ("Optional"), a known brand, or a parenthesised
+    // annotation ("(optional)") — always rendered as copy.
+    if (words.length === 1 && !KEEP.has(plain) && !/^[A-Z][a-z]{3,}$/.test(plain) && !/^\([a-z][a-z ']{2,}\)$/.test(plain)) {
+      return false;
+    }
+    // Require a real word somewhere: rejects "-" and "a / b" scratch values.
+    if (!/[a-z]{3,}/.test(plain)) return false;
     if (/\b(?:px|rem|em|ms|rgba?|hsla?|var|calc)\b/.test(plain)) return false;
+    // Multi-word strings are accepted here. Shape heuristics ("all words are
+    // short", "no function word") were tried and kept rejecting real labels
+    // like "Claude usage unavailable"; search-index fields are excluded
+    // structurally instead (see INDEX_PROPS in collect.mjs).
   }
   return true;
 }
@@ -212,4 +260,4 @@ export function looksLikeCssFragment(text) {
   return cssTokenRatio(trimmed) === 1;
 }
 
-export { NON_PROSE, KEY_NAMES, PLACEHOLDER_TEXT, CSS_BARE };
+export { NON_PROSE, KEY_NAMES, PLACEHOLDER_TEXT, CSS_BARE, COMMAND_ID };
