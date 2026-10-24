@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { complete, parseJsonObject, resolveProvider } from "./lib/provider.mjs";
 import { KEEP } from "./lib/filters.mjs";
+import { loadOverrides } from "./lib/dictionary.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DICT_FILE = ".zh-cn/dictionary.json";
@@ -95,15 +96,6 @@ function loadSeed(root) {
   const candidates = [path.join(root, "tools", "zh-cn", "seed.zh-cn.json")];
   const file = candidates.find((candidate) => fs.existsSync(candidate));
   return file ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-}
-
-/** Hand-fixed translations that win over the model. */
-function loadOverrides(root) {
-  const file = path.join(root, "tools", "zh-cn", "overrides.json");
-  if (!fs.existsSync(file)) return {};
-  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-  delete parsed._comment;
-  return parsed;
 }
 
 /** Strings that must stay English (internal logs, protocol constants). */

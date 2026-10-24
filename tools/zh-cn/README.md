@@ -41,6 +41,7 @@ tools/zh-cn/
   lib/menu-extract.mjs  从 menu.rs / macos.rs / Info.plist 抽原生文案
   lib/provider.mjs   LLM 客户端（OpenAI 兼容 / Anthropic 兼容）
   lib/runtime-script.mjs  生成 dist/zh-cn.js
+  lib/dictionary.mjs  字典解析：工作字典 → seed → 人工订正（注入与审计共用）
   lib/native.mjs     生成 zh_cn.rs、改 lib.rs、本地化 Info.plist
   glossary.json      术语表，权重高于模型自由发挥
   overrides.json     人工订正，优先级最高（模型翻译会覆盖错的优先改这里）
@@ -53,6 +54,7 @@ tools/zh-cn/
   extract.test.mjs   抽取器判定（文案 vs CSS vs 枚举值）
   reported.test.mjs  用户报告的两轮漏译，锁定不回归
   pipeline.test.mjs  失败路径（无字典、空字典、陈旧条目、重复注入）
+  dictionary.test.mjs 字典解析与 override 优先级（无密钥路径也要生效）
   tauri.zh-cn.conf.json  打包覆盖配置
 ```
 
@@ -100,10 +102,10 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 未配翻译密钥时，上游新增文案会保持英文，`audit` 步骤只警告不阻断。人工补法：
 
 1. `npm run audit` 看还差哪些可见文案（`node tools/zh-cn/audit-all.mjs --limit 100000` 放开全部启发式，用于确认规则没漏掉真文案）；
-2. 把缺失的串写进 `tools/zh-cn/seed.zh-cn.json` 的 `entries`（带 `{0}` 的模板写进 `patterns`），文案纠错改 `overrides.json`（优先级最高）；
+2. 把译文写进 `tools/zh-cn/overrides.json`（键为英文源串，带 `{0}` 的模板照写；它优先级最高，翻译步骤被跳过时照样生效，界面与原生菜单都吃这一份）。要一次性补大批历史缺口，也可以写 `seed.zh-cn.json` 的 `entries`/`patterns`；
 3. 推送到 `main` —— gate 认出语言层变了，自动重出当前版本的 DMG 与 Release 资产。
 
-两个坑：`kept`（来自 `keep.txt`/`keep.json`）里的键即使补了译文也不渲染，要翻它先把它从 keep 列表删掉；`.zh-cn/dictionary.json` 一旦存在就会**遮蔽** seed，本地手工改 seed 前先删掉它（CI 上该文件只在 `zh-cn-state` 分支存在时才恢复）。
+两个坑：① `kept`（来自 `keep.txt`/`keep.json`）里的串补进 `seed` 也不会渲染——要么把它从 keep 列表删掉，要么走 `overrides.json`（人工订正会同时解除 keep）。② `.zh-cn/dictionary.json` 一旦存在就会**遮蔽** seed，本地改 seed 前先删掉它（CI 上只有 `zh-cn-state` 分支存在时才会恢复该文件）。
 
 ## 常见故障
 
@@ -118,6 +120,7 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 | 拷出的 DMG 打不开 | 未公证 | 右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/MonoCode.app` |
 | 菜单点开还是英文 | 前端推送快捷键覆盖重建了整份菜单 | 已修复：`menu.rs` 的 `set_menu` 之后立刻重新本地化 |
 | 新版本没有新 Release | 版本号没变，且本次推送没碰 `tools/zh-cn/`，gate 判定已发布 | 手动 `workflow_dispatch` 勾 `force` |
+| `audit` 报 `0 translated`、已译的串被列为缺口 | 它只读 `.zh-cn/dictionary.json`（没配密钥时不存在），且把 `kept` 当缺口 | 已修复：与注入路径共用同一加载器，并把 `kept` 计为已覆盖 |
 
 ## 已知边界
 
@@ -134,6 +137,6 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 - 没有 Apple Developer 证书时产物是 ad-hoc 签名、未公证：首次打开需右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/MonoCode.app`。
 - 上游若重命名菜单 id 或改文案，`zh_cn.rs` 的 `BY_ID`/`BY_TEXT` 会按新抽取结果自动重建；没覆盖到的项保持英文而不是报错。
 - 「保持英文」的键若含换行，`keep.txt` 一行一条表达不了，写进 `keep.json` 的 `keys` 数组。
-- 机器翻译会出错，尤其是长句。纠错优先级：`overrides.json`（人工订正，最高） > `glossary.json`（术语） > 模型输出。
+- 机器翻译会出错，尤其是长句。纠错优先级：`overrides.json`（人工订正，最高，无密钥时也生效） > `glossary.json`（术语） > 模型输出。
 - 审计输出里剩下的多为例值（`https://gitlab.com`、`feature/my-task`、`glpat-…`）、品牌名与路径，属于预期不译。`node tools/zh-cn/audit.mjs` 会打印它们及出处；`node tools/zh-cn/audit-all.mjs --limit 100000` 关掉全部启发式，列出 AST 看到的一切，用来确认规则没漏掉真文案。
 - 本机验证范围：菜单栏、菜单项与注入字典已实测；界面正文用 happy-dom 跑运行时脚本验证，未做真实窗口截图（受屏幕锁定限制）。

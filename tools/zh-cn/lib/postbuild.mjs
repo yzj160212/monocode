@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { renderRuntimeScript } from "./runtime-script.mjs";
+import { dropKept, loadDictionary } from "./dictionary.mjs";
 
 const SCRIPT_RE = /\s*<script src="\/zh-cn\.js[^"]*"><\/script>/g;
 const MARKER = "<!-- zh-cn -->";
@@ -47,8 +48,8 @@ export function postBuild(root, { distDir = "dist" } = {}) {
   const dist = path.join(root, distDir);
   if (!fs.existsSync(dist)) throw new Error(`${distDir}/ missing; run the frontend build first`);
 
-  // Fall back to the committed seed. Without it a build that never ran
-  // translate.mjs (first run, or no credentials) would silently inject an empty
+  // .zh-cn/dictionary.json → committed seed → hand overrides; without the seed
+  // fallback a build that never ran translate.mjs would inject an empty
   // dictionary and ship an all-English app.
   const dictionary = loadDictionary(root);
   if (Object.keys(dictionary.entries).length === 0 && Object.keys(dictionary.patterns).length === 0) {
@@ -83,33 +84,6 @@ export function postBuild(root, { distDir = "dist" } = {}) {
   fs.writeFileSync(path.join(root, ".zh-cn", "manifest.json"), `${JSON.stringify(manifest, null, 1)}\n`);
 
   return manifest;
-}
-
-/** Working dictionary if present, else the committed seed snapshot. */
-function loadDictionary(root) {
-  const candidates = [
-    path.join(root, ".zh-cn", "dictionary.json"),
-    path.join(root, "tools", "zh-cn", "seed.zh-cn.json"),
-  ];
-  for (const file of candidates) {
-    if (!fs.existsSync(file)) continue;
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (parsed && typeof parsed === "object") {
-      return { entries: parsed.entries ?? {}, patterns: parsed.patterns ?? {}, kept: parsed.kept ?? {} };
-    }
-  }
-  return { entries: {}, patterns: {}, kept: {} };
-}
-
-/** Strings the translator deliberately left in English are not rewritten. */
-function dropKept(table, kept = {}) {
-  const out = {};
-  for (const [source, target] of Object.entries(table ?? {})) {
-    if (kept[source] === 1) continue;
-    if (typeof target !== "string" || !target.trim() || target === source) continue;
-    out[source] = target;
-  }
-  return out;
 }
 
 function shortHash(payload) {

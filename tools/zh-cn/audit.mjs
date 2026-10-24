@@ -13,6 +13,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { sourceFiles } from "./extract.mjs";
+import { loadDictionary } from "./lib/dictionary.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -60,10 +61,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const root = path.resolve(args.root);
   const ts = require(path.join(root, "node_modules", "typescript"));
-  const dictionaryPath = path.join(root, ".zh-cn", "dictionary.json");
-  const dictionary = fs.existsSync(dictionaryPath)
-    ? JSON.parse(fs.readFileSync(dictionaryPath, "utf8"))
-    : { entries: {}, patterns: {}, kept: {} };
+  const dictionary = loadDictionary(root);
   const patterns = compilePatterns(dictionary.patterns ?? {});
 
   /** English -> {count, files:Set} */
@@ -75,6 +73,11 @@ function main() {
     const normalized = text.replace(/\s+/g, " ").trim();
     if (!normalized || !/[A-Za-z]{2,}/.test(normalized)) return;
     total += 1;
+    // 「保持英文」是人工决定，不是缺口：补了译文也不会渲染，别报出来。
+    if (dictionary.kept?.[normalized] === 1) {
+      covered.add(normalized);
+      return;
+    }
     if (translate(normalized, dictionary.entries, patterns)) {
       covered.add(normalized);
       return;

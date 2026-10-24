@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { loadDictionary } from "./lib/dictionary.mjs";
 import { sourceFiles } from "./extract.mjs";
 
 const require = createRequire(import.meta.url);
@@ -47,14 +48,6 @@ function compilePatterns(patterns) {
   });
 }
 
-function loadDictionary(root) {
-  for (const rel of [".zh-cn/dictionary.json", "tools/zh-cn/seed.zh-cn.json"]) {
-    const file = path.join(root, rel);
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, "utf8"));
-  }
-  throw new Error("no dictionary");
-}
-
 /** Reject the shapes that are definitely not user-visible copy. */
 const NOT_COPY = [
   /^[\s\d\p{P}\p{S}]*$/u,
@@ -68,7 +61,10 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const root = path.resolve(args.root);
   const ts = require(path.join(root, "node_modules", "typescript"));
+  // Same resolution as the injection path, so an audit never reports a string
+  // that a hand override (or the committed seed) already translates.
   const dictionary = loadDictionary(root);
+  if (!dictionary.source) throw new Error("no dictionary");
   const patterns = compilePatterns(dictionary.patterns ?? {});
   const kept = dictionary.kept ?? {};
 
