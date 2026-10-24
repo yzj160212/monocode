@@ -84,7 +84,7 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 工作流：`.github/workflows/zh-cn-release.yml`
 
 触发：push 到 `main`（含 Sync fork）、手动 `workflow_dispatch`。
-行为：版本号对应的 Release 已存在就跳过；否则翻译 → 注入 → 打包 → 发布 `zh-cn-v<version>`。
+行为：Release `zh-cn-v<version>` 不存在时翻译 → 注入 → 打包 → 发布；已存在时，只有本次推送改动了 `tools/zh-cn/**` 或工作流本身才重出包，其余推送跳过。
 
 需要在仓库 Settings → Secrets 配置：
 
@@ -96,6 +96,14 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 | `ZH_TRANSLATE_FORMAT` | 否 | `openai`（默认）或 `anthropic` |
 
 翻译字典存在独立分支 `zh-cn-state`，不占 `main`，也不会被 Sync fork 冲掉；每轮只翻译新增/变更的文案。
+
+未配翻译密钥时，上游新增文案会保持英文，`audit` 步骤只警告不阻断。人工补法：
+
+1. `npm run audit` 看还差哪些可见文案（`node tools/zh-cn/audit-all.mjs --limit 100000` 放开全部启发式，用于确认规则没漏掉真文案）；
+2. 把缺失的串写进 `tools/zh-cn/seed.zh-cn.json` 的 `entries`（带 `{0}` 的模板写进 `patterns`），文案纠错改 `overrides.json`（优先级最高）；
+3. 推送到 `main` —— gate 认出语言层变了，自动重出当前版本的 DMG 与 Release 资产。
+
+两个坑：`kept`（来自 `keep.txt`/`keep.json`）里的键即使补了译文也不渲染，要翻它先把它从 keep 列表删掉；`.zh-cn/dictionary.json` 一旦存在就会**遮蔽** seed，本地手工改 seed 前先删掉它（CI 上该文件只在 `zh-cn-state` 分支存在时才恢复）。
 
 ## 常见故障
 
@@ -109,7 +117,7 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 | `找不到 DMG` | `--bundles dmg` 会清掉 `.app`，`verify.mjs` 无从校验 | 用 `--bundles app,dmg` |
 | 拷出的 DMG 打不开 | 未公证 | 右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/MonoCode.app` |
 | 菜单点开还是英文 | 前端推送快捷键覆盖重建了整份菜单 | 已修复：`menu.rs` 的 `set_menu` 之后立刻重新本地化 |
-| 新版本没有新 Release | 版本号没变，gate 判定已发布 | 手动 `workflow_dispatch` 勾 `force` |
+| 新版本没有新 Release | 版本号没变，且本次推送没碰 `tools/zh-cn/`，gate 判定已发布 | 手动 `workflow_dispatch` 勾 `force` |
 
 ## 已知边界
 

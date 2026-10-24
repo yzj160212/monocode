@@ -36,10 +36,15 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # gate 要比对本次推送动了哪些文件，浅克隆取不到 before 提交。
+          fetch-depth: 0
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
           FORCE: ${{ inputs.force }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
@@ -51,12 +56,30 @@ jobs:
             echo "手动触发：强制打包 $TAG"
             exit 0
           fi
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-            echo "$TAG 已存在，跳过。"
-          else
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             echo "发现新版本 $VERSION，开始打包。"
+            exit 0
+          fi
+          # 版本号没变、Release 已存在。只有本次推送改动了语言层或打包流程时
+          # 才重出包——手工补了字典、改了注入规则，产物就变了，跳过会把 Release
+          # 停在旧内容上。只改上游业务代码或文档时照旧跳过，不烧 macOS 分钟。
+          if [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
+          elif git rev-parse --verify -q "${AFTER}^" >/dev/null 2>&1; then
+            CHANGED=$(git diff --name-only "${AFTER}^" "$AFTER")
+          else
+            CHANGED=$(git show --name-only --format= "$AFTER")
+          fi
+          TOUCHED=$(printf '%s\n' "$CHANGED" | grep -E '^(tools/zh-cn/|\.github/workflows/zh-cn-release\.yml$)' || true)
+          if [ -n "$TOUCHED" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "$TAG 已存在，但本次推送改动了语言层，重出包："
+            printf '%s\n' "$TOUCHED"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG 已存在，且本次推送未触碰语言层，跳过。"
           fi
 
   build:
