@@ -6,35 +6,22 @@
 // explains where a miss comes from.
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Window } from "happy-dom";
 import { renderRuntimeScript } from "./lib/runtime-script.mjs";
+import { dropKept, loadDictionary } from "./lib/dictionary.mjs";
 
-/**
- * The dictionary the build used. `.zh-cn/` is generated, so fall back to the
- * committed seed when a fresh clone runs the tests before any translation.
- */
-function loadDictionary() {
-  const root = new URL("../../", import.meta.url);
-  for (const candidate of [".zh-cn/dictionary.json", "tools/zh-cn/seed.zh-cn.json"]) {
-    const file = new URL(candidate, root);
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, "utf8"));
-  }
-  throw new Error("no dictionary found: run tools/zh-cn/translate.mjs first");
-}
-
-const dictionary = loadDictionary();
+/** The dictionary the build would use — same resolution as the pipeline. */
+const root = fileURLToPath(new URL("../../", import.meta.url));
+const dictionary = loadDictionary(root);
+if (!dictionary.source) throw new Error("no dictionary found: run tools/zh-cn/translate.mjs first");
 
 /** The exact payload the build injects into dist/zh-cn.js. */
 function runtimePayload() {
-  const kept = dictionary.kept ?? {};
-  const drop = (table) =>
-    Object.fromEntries(
-      Object.entries(table ?? {}).filter(
-        ([source, target]) => kept[source] !== 1 && typeof target === "string" && target && target !== source,
-      ),
-    );
-  return { entries: drop(dictionary.entries), patterns: drop(dictionary.patterns) };
+  return {
+    entries: dropKept(dictionary.entries, dictionary.kept),
+    patterns: dropKept(dictionary.patterns, dictionary.kept),
+  };
 }
 
 const SAMPLE = [
