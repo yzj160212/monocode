@@ -1,0 +1,21 @@
+# 明确保持英文的文案（每行一条，原样匹配）。
+# 只放「品牌 / 产品名 / 标识符」——翻译只会降低可读性。
+# 纯代码或样式模板由 lib/filters.mjs 的规则排除，不要写在这里。
+devin
+codex
+acp
+omp CLI
+Pi CLI
+mono
+monos
+codex opencode cursor grok pi omp fx hermes antigravity devin binary path
+OMP get_available_commands returned no commands array
+Pi · OpenAI Codex
+# 提示词标记：模型指令前缀，不是界面文案
+Ultrathink:
+Ultrathink:
+# 图标名 / 模型名 / 品牌名 / 键盘枚举名：界面里就该显示原文
+Zap
+GLM 5
+fx CLI
+Alt

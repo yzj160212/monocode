@@ -1,0 +1,7 @@
+{
+  "_comment": "不能按行表达的保持原文串（含换行）。每项为字典键原样。",
+  "keys": [
+    "Ultrathink:\n{0}",
+    "Ultrathink:"
+  ]
+}

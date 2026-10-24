@@ -1,0 +1,198 @@
+name: 简体中文 aarch64 发行版
+
+# 上游 MonoCode 更新后，你在 GitHub 上点「Sync fork」同步本仓库的 main 分支，
+# 本工作流就会自动：翻译新增文案 → 注入中文语言层 → 打包 Apple Silicon DMG
+# → 发布 Release。版本号没变则直接跳过，不会重复打包。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 忽略「该版本已发布」直接重新打包
+        type: boolean
+        default: false
+
+permissions:
+  # 建 Release、推字典分支都需要写权限；其余步骤不再需要额外权限。
+  contents: write
+
+concurrency:
+  group: zh-cn-release
+  cancel-in-progress: false
+
+env:
+  # 增量翻译字典存在独立分支，避免和 Sync fork 的 main 冲突。
+  STATE_BRANCH: zh-cn-state
+  DICT_PATH: .zh-cn/dictionary.json
+
+jobs:
+  gate:
+    name: 检查是否需要打包
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          TAG="zh-cn-v${VERSION}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" = "true" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "手动触发：强制打包 $TAG"
+            exit 0
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG 已存在，跳过。"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "发现新版本 $VERSION，开始打包。"
+          fi
+
+  build:
+    name: 翻译 / 注入 / 打包 DMG
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
+    # macos-latest 是 Apple Silicon（M 系列）镜像，产物本身就是 arm64。
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: . -> target
+          key: zh-cn-aarch64
+
+      # 复用上一轮的字典，只翻译新增/变更的文案。
+      - name: 恢复增量字典
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "$STATE_BRANCH" || exit 0
+          mkdir -p .zh-cn
+          git show "FETCH_HEAD:$DICT_PATH" > "$DICT_PATH" 2>/dev/null || rm -f "$DICT_PATH"
+          if [ -s "$DICT_PATH" ]; then
+            echo "已恢复字典：$(node -p "Object.keys(require('./$DICT_PATH').entries).length") 条"
+          fi
+
+      - run: npm ci
+
+      # 语言层自身的回归测试：运行时替换规则、代码面跳过、抽取器判定。
+      - name: 测试语言层
+        run: npm run zh-cn:test
+
+      - name: 抽取待翻译文案
+        run: node tools/zh-cn/extract.mjs
+
+      - name: 翻译（增量）
+        env:
+          ZH_TRANSLATE_BASE_URL: ${{ secrets.ZH_TRANSLATE_BASE_URL }}
+          ZH_TRANSLATE_API_KEY: ${{ secrets.ZH_TRANSLATE_API_KEY }}
+          ZH_TRANSLATE_MODEL: ${{ secrets.ZH_TRANSLATE_MODEL }}
+          ZH_TRANSLATE_FORMAT: ${{ secrets.ZH_TRANSLATE_FORMAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ZH_TRANSLATE_API_KEY:-}" ]; then
+            echo "::warning::未配置 ZH_TRANSLATE_API_KEY，跳过翻译，仅打包已缓存的中文条目。"
+            exit 0
+          fi
+          node tools/zh-cn/translate.mjs --workers 3
+
+      # 覆盖率审计：列出字典仍覆盖不到的可见文案。只警告不阻断——
+      # 其中总会包含示例值、路径与品牌名。
+      - name: 审计覆盖率
+        continue-on-error: true
+        run: node tools/zh-cn/audit.mjs --limit 40
+
+      - name: 注入原生菜单中文层
+        run: node tools/zh-cn/patch-native.mjs
+
+      # tauri build 会自己执行 beforeBuildCommand；覆盖配置把这一步换成
+      # 「tsc + vite build + 注入中文语言层」，因此注入的 dist 才会进 DMG。
+      - name: 打包 aarch64 DMG
+        # 覆盖 createUpdaterArtifacts / signingIdentity：没有签名密钥时上游配置会直接失败。
+        run: npx tauri build --target aarch64-apple-darwin --bundles app,dmg --config tools/zh-cn/tauri.zh-cn.conf.json
+
+      - name: 校验产物
+        run: node tools/zh-cn/verify.mjs --target aarch64-apple-darwin
+
+      - name: 重命名产物
+        id: artifact
+        env:
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+          # find 而不是 ls：dmg 名带空格时 ls 会把一个文件名拆成多个。
+          SRC=$(find target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)
+          [ -n "$SRC" ] || { echo "::error::未找到 DMG"; exit 1; }
+          OUT="MonoCode_${VERSION}_aarch64_zh-CN.dmg"
+          cp "$SRC" "$OUT"
+          shasum -a 256 "$OUT" > "$OUT.sha256"
+          echo "file=$OUT" >> "$GITHUB_OUTPUT"
+          cat "$OUT.sha256"
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.gate.outputs.tag }}
+          VERSION: ${{ needs.gate.outputs.version }}
+          FILE: ${{ steps.artifact.outputs.file }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          MonoCode **$VERSION** 简体中文版（Apple Silicon / arm64）
+
+          - 界面文案已机器翻译为简体中文，原生菜单与 Dock 菜单同步汉化
+          - 未做 Apple 公证：首次打开请右键 → 打开，或在终端执行
+            \`xattr -dr com.apple.quarantine /Applications/MonoCode.app\`
+          - 基于上游 [hardbeat920/monocode](https://github.com/hardbeat920/monocode) 同步构建
+
+          校验：见 \`$FILE.sha256\`
+          EOF
+          # 手动强制重打包时脚本命中的是同一个 tag，先删旧 Release 再建。
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" "$FILE" "$FILE.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "MonoCode $VERSION 简体中文 (aarch64)" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            --latest=false
+
+      # 字典存在独立分支，不占 main，也不会被 Sync fork 冲掉。
+      - name: 保存增量字典
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          WORK=$(mktemp -d)
+          cd "$WORK"
+          git init -q
+          git config user.name "zh-cn bot"
+          git config user.email "zh-cn-bot@users.noreply.github.com"
+          mkdir -p .zh-cn
+          cp "$GITHUB_WORKSPACE/$DICT_PATH" .zh-cn/dictionary.json
+          git add .zh-cn/dictionary.json
+          git commit -qm "更新中文翻译字典 ($(node -p "Object.keys(require('./.zh-cn/dictionary.json').entries).length") 条)"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"refs/heads/$STATE_BRANCH"

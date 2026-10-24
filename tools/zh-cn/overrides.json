@@ -1,0 +1,6 @@
+{
+  "_comment": "人工订正：优先于模型译文，键为英文源串（pattern 用 {0} 占位）。",
+  "{0} {1} available.": "有 {0} 个模型可用。",
+  "{0} is not available in MonoCode": "{0} 在 MonoCode 中不可用",
+  "Run the hooks configured in your settings.json files - PreToolUse command rewrites, blocks, notifications, and the rest - just as the Claude Code CLI would. Turn this off if a hook is misbehaving and you need the session back. Takes effect on the next turn.": "按 Claude Code CLI 的方式运行 settings.json 里配置的钩子——PreToolUse 命令改写、拦截、通知等。如果某个钩子行为异常、你需要拿回会话，就关掉它。下一轮生效。"
+}
