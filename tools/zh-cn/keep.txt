@@ -14,3 +14,8 @@ Pi · OpenAI Codex
 # 提示词标记：模型指令前缀，不是界面文案
 Ultrathink:
 Ultrathink:
+# 图标名 / 模型名 / 品牌名 / 键盘枚举名：界面里就该显示原文
+Zap
+GLM 5
+fx CLI
+Alt

@@ -117,11 +117,15 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 - 判定规则只认**结构**，不认串的形状。历史教训：靠「小写单词多于 5 个就是关键词堆」「首字母必须大写」「占比 >0.4 就算 CSS」这类启发式，先后误杀了 `Command Palette`、`does not support manual compaction`、`Sign in required`、`(optional)`、`Model: {0}`。要排除一类串，就找它的 AST 特征（`keywords:` 属性、`split()` 实参）或确定的非文案语法。
 - JSX 的 `&apos;` 等实体在渲染前被解码，字典键必须存**解码后**的形态，否则永不匹配。
 - React 把 `text {expr} text` 渲染成多个相邻文本节点。运行时会把相邻文本节点拼起来再匹配（`splitSentences`），但**不跨越元素边界**——中间的元素可能承载用户内容。
+- 模式表按**具体度**排序后匹配：先比字面字符数（多者优先），再比槽位数（少者优先）。否则通用键 `{0} details` 会抢在 `{0} usage details` 前命中，把 `usage` 留在英文里。
+- 模式命中后，槽位里捕获到的内容会再查一次**精确表**（不再跑模式，避免递归）。这解决 `${live ? "Running" : "Ran"} ${n} subagents` 这类「插值本身也是文案」的情况。
+- 枚举值靠**结构**识别：`===`/`!==` 一侧、`case` 后的字面串是程序匹配用的值，不是文案。JSX 子节点、UI 属性、UI 属性名（`title`/`label`/`description`…）才是渲染面。
 - 中文不区分单复数，`${n} ${n===1?"model":"models"} available.` 的第二个占位符会被译文丢掉；运行时按顺序替换，缺的槽位不渲染。
 - JSX 里的三元、`&&`、`??` 会被展开取全部分支，所以 `available ? "${n} models available." : hint()` 两个分支都能译到。
 - `code`/`pre`/`kbd`/`textarea`，以及带 `translate="no"` 或 `cm-content` 类的节点不翻译，避免动到用户内容与代码编辑器。
 - 没有 Apple Developer 证书时产物是 ad-hoc 签名、未公证：首次打开需右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/MonoCode.app`。
 - 上游若重命名菜单 id 或改文案，`zh_cn.rs` 的 `BY_ID`/`BY_TEXT` 会按新抽取结果自动重建；没覆盖到的项保持英文而不是报错。
+- 「保持英文」的键若含换行，`keep.txt` 一行一条表达不了，写进 `keep.json` 的 `keys` 数组。
 - 机器翻译会出错，尤其是长句。纠错优先级：`overrides.json`（人工订正，最高） > `glossary.json`（术语） > 模型输出。
 - 审计输出里剩下的多为例值（`https://gitlab.com`、`feature/my-task`、`glpat-…`）、品牌名与路径，属于预期不译。`node tools/zh-cn/audit.mjs` 会打印它们及出处；`node tools/zh-cn/audit-all.mjs --limit 100000` 关掉全部启发式，列出 AST 看到的一切，用来确认规则没漏掉真文案。
 - 本机验证范围：菜单栏、菜单项与注入字典已实测；界面正文用 happy-dom 跑运行时脚本验证，未做真实窗口截图（受屏幕锁定限制）。

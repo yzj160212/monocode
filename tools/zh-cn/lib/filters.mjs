@@ -238,11 +238,14 @@ export function looksLikeUiText(raw, { maxLength = 220, requireSentence = false 
     // A single bare word is an enum value far more often than a label, unless
     // it is a capitalised word ("Optional"), a known brand, or a parenthesised
     // annotation ("(optional)") — always rendered as copy.
-    if (words.length === 1 && !KEEP.has(plain) && !/^[A-Z][a-z]{3,}$/.test(plain) && !/^\([a-z][a-z ']{2,}\)$/.test(plain)) {
+    // Three-letter capitalised words are labels too (Add, All, New, Off,
+    // Yes, Run, Ran); tying the threshold to four letters was arbitrary.
+    if (words.length === 1 && !KEEP.has(plain) && !/^[A-Z][a-z]{2,}$/.test(plain) && !/^\([a-z][a-z ']{2,}\)$/.test(plain)) {
       return false;
     }
     // Require a real word somewhere: rejects "-" and "a / b" scratch values.
-    if (!/[a-z]{3,}/.test(plain)) return false;
+    // Case-insensitive: "Ran" and "Off" are whole words too.
+    if (!/[A-Za-z]{3,}/.test(plain)) return false;
     if (/\b(?:px|rem|em|ms|rgba?|hsla?|var|calc)\b/.test(plain)) return false;
     // Multi-word strings are accepted here. Shape heuristics ("all words are
     // short", "no function word") were tried and kept rejecting real labels

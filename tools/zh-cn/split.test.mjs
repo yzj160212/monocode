@@ -10,9 +10,18 @@ const payload = {
   entries: {
     Cancel: "取消",
     "Remove from this desktop?": "从此桌面移除？",
+    Running: "运行中",
   },
   patterns: {
+    // Deliberately listed after the generic key: the runtime must pick the
+    // more specific one regardless of insertion order.
     "Remove {0} from this desktop?": "从此桌面移除 {0}？",
+    "{0} details": "{0} 详情",
+    "{0} usage details": "{0} 用量详情",
+    // `${live ? "Running" : "Ran"} ${n} subagents`: the first slot carries a
+    // literal from the same expression, the second the count.
+    "{0} {1} subagents": "{0} {1} 子智能体",
+    "{0} {1} details": "{0} {1} 详情",
     "Say hello to {0}, ask a question, or hand over some work.": "向 {0} 打个招呼、提问，或交接一些工作。",
     "Select the activity on one of {0} 's messages to see each step it took.": "选择其中一个 {0} 的消息上的活动，查看它执行的每一步。",
     "Show {0} more annotations": "再显示 {0} 条注解",
@@ -80,6 +89,36 @@ test("never joins across an element boundary", () => {
   // A child element means the middle is not plain interpolated text; leaving it
   // alone is safer than rewriting around content we did not author.
   assert.equal(p.textContent, "Say hello to Mono, ask a question, or hand over some work.");
+});
+
+test("a specific pattern wins over a generic one", () => {
+  const window = new Window({ url: "http://localhost/" });
+  const cases = {
+    "Claude Code usage details": "Claude Code 用量详情",
+    "Claude Code details": "Claude Code 详情",
+  };
+  const paragraphs = Object.keys(cases).map((copy) => {
+    const p = window.document.createElement("p");
+    p.textContent = copy;
+    window.document.body.appendChild(p);
+    return p;
+  });
+  window.eval(renderRuntimeScript(payload));
+  Object.values(cases).forEach((expected, index) => {
+    assert.equal(paragraphs[index].textContent, expected);
+  });
+});
+
+test("a literal captured by a pattern slot is translated too", () => {
+  const window = new Window({ url: "http://localhost/" });
+  const p = window.document.createElement("p");
+  // `${live ? "Running" : "Ran"} ${n} subagents` renders one text node whose
+  // first word comes from a literal inside the interpolation.
+  p.textContent = "Running 3 subagents";
+  window.document.body.appendChild(p);
+  window.eval(renderRuntimeScript(payload));
+
+  assert.equal(p.textContent, "运行中 3 子智能体");
 });
 
 test("single text nodes still use exact and pattern paths", () => {

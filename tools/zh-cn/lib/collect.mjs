@@ -167,6 +167,27 @@ export function collectAll(ts, sourceFile, code) {
     return name === "split" || name === "join" || name === "replace" || name === "replaceAll";
   };
 
+  /**
+   * A string compared with `===`/`!==` or used as a `case` test is a value the
+   * program matches on, not copy that reaches the screen. This is the only
+   * reliable way to tell `key === "Tab"` from the label "Tab".
+   */
+  const isEnumOperand = (node) => {
+    const parent = node.parent;
+    if (!parent) return false;
+    if (ts.isCaseClause(parent)) return true;
+    if (ts.isBinaryExpression(parent) && parent.operatorToken) {
+      const kind = parent.operatorToken.kind;
+      return (
+        kind === ts.SyntaxKind.EqualsEqualsToken ||
+        kind === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+        kind === ts.SyntaxKind.ExclamationEqualsToken ||
+        kind === ts.SyntaxKind.ExclamationEqualsEqualsToken
+      );
+    }
+    return false;
+  };
+
   const stringOf = (node) => {
     if (!node) return undefined;
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
@@ -289,6 +310,8 @@ export function collectAll(ts, sourceFile, code) {
         const pattern = templatePattern(node);
         if (pattern) addPattern(pattern, "template");
       }
+    } else if (isEnumOperand(node)) {
+      // Matched against, never rendered.
     } else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       if (node.parent && ts.isImportDeclaration(node.parent)) return;
       // A literal handed to split()/join() is a delimiter or a word list, never

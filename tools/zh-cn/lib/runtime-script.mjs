@@ -30,9 +30,26 @@ export function renderRuntimeScript(payload, { hash = "dev" } = {}) {
   var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, CODE: 1, PRE: 1, KBD: 1, TEXTAREA: 1 };
 
   // Compile patterns once: "Open {0}" -> /^Open (.*)$/
+  //
+  // Order matters: the first match wins, so a generic "{0} {1} details" would
+  // shadow "{0} CLI details" and leave the middle word in English. Specificity
+  // is the amount of literal text, then the fewest wildcards: more literal
+  // characters is stricter, and fewer slots is stricter at equal length.
+  var keys = [];
+  for (var key in PATTERN) keys.push(key);
+  var literalLength = function (k) { return k.replace(/\{\d+\}/g, "").length; };
+  var slotCount = function (k) { return (k.match(/\{\d+\}/g) || []).length; };
+  keys.sort(function (a, b) {
+    var byLiteral = literalLength(b) - literalLength(a);
+    if (byLiteral !== 0) return byLiteral;
+    var bySlots = slotCount(a) - slotCount(b);
+    if (bySlots !== 0) return bySlots;
+    return b.length - a.length;
+  });
+
   var compiled = [];
-  for (var key in PATTERN) {
-    var parts = key.split(/\\{(\\d+)\\}/);
+  for (var ki = 0; ki < keys.length; ki += 1) {
+    var parts = keys[ki].split(/\\{(\\d+)\\}/);
     var source = "";
     for (var i = 0; i < parts.length; i += 1) {
       if (i % 2 === 0) {
@@ -41,7 +58,7 @@ export function renderRuntimeScript(payload, { hash = "dev" } = {}) {
         source += "([\\\\s\\\\S]*?)";
       }
     }
-    compiled.push({ re: new RegExp("^" + source + "$"), out: PATTERN[key] });
+    compiled.push({ re: new RegExp("^" + source + "$"), out: PATTERN[keys[ki]] });
   }
 
   function trimParts(value) {
@@ -61,7 +78,14 @@ export function renderRuntimeScript(payload, { hash = "dev" } = {}) {
       var match = compiled[i].re.exec(core);
       if (!match) continue;
       var out = compiled[i].out;
-      var body = out.replace(/\\{(\\d+)\\}/g, function (_, n) { return match[Number(n) + 1]; });
+      var body = out.replace(/\\{(\\d+)\\}/g, function (_, n) {
+        var captured = match[Number(n) + 1];
+        // A slot may hold a literal from the same expression, e.g.
+        // a ternary between "Running" and "Ran" before "{n} subagents".
+        // Translate exact hits only: running the pattern table again could loop.
+        var exact = EXACT[captured];
+        return exact !== undefined && exact !== captured ? exact : captured;
+      });
       return parts[0] + body + parts[2];
     }
     return null;
