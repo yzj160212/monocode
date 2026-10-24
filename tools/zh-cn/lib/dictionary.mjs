@@ -33,12 +33,12 @@ export function loadOverrides(root) {
 }
 
 /**
- * Writes one translation into the table it belongs to: template strings (with a
- * `{0}` slot) go to `patterns`, everything else to `entries`. A hand-fixed
+ * Writes one translation into the table it belongs to: template strings (any
+ * `{n}` slot) go to `patterns`, everything else to `entries`. A hand-fixed
  * string also leaves the keep-English list — the human just asked for it.
  */
 export function store(dictionary, source, translated) {
-  if (source.includes("{0}")) dictionary.patterns[source] = translated;
+  if (/\{\d+\}/.test(source)) dictionary.patterns[source] = translated;
   else dictionary.entries[source] = translated;
   if (dictionary.kept[source] === 1) dictionary.kept[source] = 0;
   delete dictionary.untranslated?.[source];

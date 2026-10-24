@@ -43,7 +43,7 @@ test("hand overrides win over the working dictionary, and leave the keep list", 
   const dir = sandbox({
     seed: { version: 1, entries: { Cancel: "取消", Keep: "Keep" }, patterns: {}, kept: { Keep: 1 } },
     dictionary: { entries: { Cancel: "取消X", Keep: "Keep" }, patterns: {}, kept: { Keep: 1 } },
-    overrides: { Cancel: "取消", Keep: "保留", "Open {0}": "打开 {0}" },
+    overrides: { Cancel: "取消", Keep: "保留", "Open {0}": "打开 {0}", "{1} of {0}": "{1}（{0}）" },
   });
 
   const dictionary = loadDictionary(dir);
@@ -51,6 +51,7 @@ test("hand overrides win over the working dictionary, and leave the keep list", 
   assert.equal(dictionary.entries.Cancel, "取消", "an override must beat the model output");
   assert.equal(dictionary.entries.Keep, "保留");
   assert.equal(dictionary.patterns["Open {0}"], "打开 {0}", "a {0} override must land in the pattern table");
+  assert.equal(dictionary.patterns["{1} of {0}"], "{1}（{0}）", "any {n} slot means template");
   assert.equal(dictionary.kept.Keep, 0, "a hand-fixed string leaves the keep-English list");
   fs.rmSync(dir, { recursive: true, force: true });
 });
