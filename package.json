@@ -35,7 +35,6 @@
     "zh-cn:test": "node --test tools/zh-cn/*.test.mjs",
     "zh-cn:verify": "node tools/zh-cn/verify.mjs",
     "zh-cn:audit": "node tools/zh-cn/audit.mjs",
-    "auditAll": "zh-cn:all",
     "zh-cn:audit-all": "node tools/zh-cn/audit-all.mjs"
   },
   "dependencies": {
