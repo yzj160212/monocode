@@ -30,6 +30,8 @@ tools/zh-cn/
   extract.mjs        抽取待翻译文案 → .zh-cn/worklist.json
   translate.mjs      增量翻译 → .zh-cn/dictionary.json
   audit.mjs          列出字典仍覆盖不到的可见文案（覆盖率审计）
+  audit-all.mjs      零启发式审计：AST 看到但字典未覆盖的全部串，用于证明
+                     判定规则没有把真文案误判成代码
   patch-native.mjs    生成 src-tauri/src/zh_cn.rs，挂到 lib.rs 与 menu.rs
   build.mjs          tsc + vite build + 注入（tauri 的 beforeBuildCommand）
   postbuild.mjs      单独注入 dist/（手工调试用）
@@ -42,11 +44,14 @@ tools/zh-cn/
   lib/native.mjs     生成 zh_cn.rs、改 lib.rs、本地化 Info.plist
   glossary.json      术语表，权重高于模型自由发挥
   overrides.json     人工订正，优先级最高（模型翻译会覆盖错的优先改这里）
-  keep.txt           明确保持英文的串（内部日志、协议常量、纯代码模板）
+  keep.txt           明确保持英文的串，每行一条（品牌名、协议常量）
+  keep.json          同上，但用于含换行的键（keep.txt 一行一条表达不了）
   seed.zh-cn.json    已提交的字典快照，首次构建不必全量重翻
   runtime.test.mjs   运行时替换规则（代码面跳过、后续渲染、占位符）
+  split.test.mjs     跨文本节点的整句替换（React 把 `text {expr} text` 渲染成
+                     多个相邻文本节点，逐节点匹配翻不了）
   extract.test.mjs   抽取器判定（文案 vs CSS vs 枚举值）
-  reported.test.mjs  用户报告的 14 条漏译，锁定不回归
+  reported.test.mjs  用户报告的两轮漏译，锁定不回归
   pipeline.test.mjs  失败路径（无字典、空字典、陈旧条目、重复注入）
   tauri.zh-cn.conf.json  打包覆盖配置
 ```
@@ -108,12 +113,15 @@ npm run zh-cn:audit                  # 还差哪些可见文案
 
 ## 已知边界
 
-- 运行时层只替换**完全匹配**的文本，所以带插值的句子依赖 `{0}` 模板（`Open {0}` 这类）。模板是否算文案由 `lib/collect.mjs` 判定：整段 Tailwind 占比 >0.4、或形如 `translateY({0}px)`、`{0}px`、`commit:{0}:{1}`、`<xml>{0}</xml>` 的一律排除。
+- 运行时层只替换**完全匹配**的文本，所以带插值的句子依赖 `{0}` 模板（`Open {0}` 这类）。模板是否算文案由 `lib/collect.mjs` 判定：全部 token 都是 Tailwind/CSS utility、或形如 `translateY({0}px)`、`{0}px minmax(0, 1fr)`、`commit:{0}:{1}`、`<xml>{0}</xml>`、`Ultrathink:\n{0}` 的排除。
+- 判定规则只认**结构**，不认串的形状。历史教训：靠「小写单词多于 5 个就是关键词堆」「首字母必须大写」「占比 >0.4 就算 CSS」这类启发式，先后误杀了 `Command Palette`、`does not support manual compaction`、`Sign in required`、`(optional)`、`Model: {0}`。要排除一类串，就找它的 AST 特征（`keywords:` 属性、`split()` 实参）或确定的非文案语法。
+- JSX 的 `&apos;` 等实体在渲染前被解码，字典键必须存**解码后**的形态，否则永不匹配。
+- React 把 `text {expr} text` 渲染成多个相邻文本节点。运行时会把相邻文本节点拼起来再匹配（`splitSentences`），但**不跨越元素边界**——中间的元素可能承载用户内容。
 - 中文不区分单复数，`${n} ${n===1?"model":"models"} available.` 的第二个占位符会被译文丢掉；运行时按顺序替换，缺的槽位不渲染。
 - JSX 里的三元、`&&`、`??` 会被展开取全部分支，所以 `available ? "${n} models available." : hint()` 两个分支都能译到。
 - `code`/`pre`/`kbd`/`textarea`，以及带 `translate="no"` 或 `cm-content` 类的节点不翻译，避免动到用户内容与代码编辑器。
 - 没有 Apple Developer 证书时产物是 ad-hoc 签名、未公证：首次打开需右键 → 打开，或 `xattr -dr com.apple.quarantine /Applications/MonoCode.app`。
 - 上游若重命名菜单 id 或改文案，`zh_cn.rs` 的 `BY_ID`/`BY_TEXT` 会按新抽取结果自动重建；没覆盖到的项保持英文而不是报错。
 - 机器翻译会出错，尤其是长句。纠错优先级：`overrides.json`（人工订正，最高） > `glossary.json`（术语） > 模型输出。
-- 审计输出里剩下的多为例值（`https://gitlab.com`、`feature/my-task`、`glpat-…`）、品牌名与路径，属于预期不译。`node tools/zh-cn/audit.mjs` 会打印它们及出处。
+- 审计输出里剩下的多为例值（`https://gitlab.com`、`feature/my-task`、`glpat-…`）、品牌名与路径，属于预期不译。`node tools/zh-cn/audit.mjs` 会打印它们及出处；`node tools/zh-cn/audit-all.mjs --limit 100000` 关掉全部启发式，列出 AST 看到的一切，用来确认规则没漏掉真文案。
 - 本机验证范围：菜单栏、菜单项与注入字典已实测；界面正文用 happy-dom 跑运行时脚本验证，未做真实窗口截图（受屏幕锁定限制）。

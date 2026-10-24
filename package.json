@@ -32,7 +32,7 @@
     "zh-cn:native": "node tools/zh-cn/patch-native.mjs",
     "zh-cn:post": "node tools/zh-cn/postbuild.mjs",
     "zh-cn:build": "node tools/zh-cn/build.mjs",
-    "zh-cn:test": "node --test tools/zh-cn/runtime.test.mjs tools/zh-cn/extract.test.mjs tools/zh-cn/reported.test.mjs tools/zh-cn/pipeline.test.mjs",
+    "zh-cn:test": "node --test tools/zh-cn/*.test.mjs",
     "zh-cn:verify": "node tools/zh-cn/verify.mjs",
     "zh-cn:audit": "node tools/zh-cn/audit.mjs"
   },
