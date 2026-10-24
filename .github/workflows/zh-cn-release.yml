@@ -186,6 +186,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # 未配置翻译密钥时，上一步直接跳过，本就没有新字典可存；构建用的是
+          # 已提交的 seed。这里跟着跳过，而不是让整次运行因为 cp 失败而变红。
+          if [ ! -f "$GITHUB_WORKSPACE/$DICT_PATH" ]; then
+            echo "::notice::没有生成增量字典（未配置翻译密钥），跳过保存。构建使用已提交的 seed。"
+            exit 0
+          fi
           WORK=$(mktemp -d)
           cd "$WORK"
           git init -q
